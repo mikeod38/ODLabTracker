@@ -1,0 +1,41 @@
+Metadata-Version: 2.4
+Name: ODLabTracker
+Version: 0.0.0
+Summary: Fast and easy worm tracker
+Author-email: MikeODonnell <mikeod38@gmail.com>
+Maintainer-email: MikeODonnell <mikeod38@gmail.com>
+Project-URL: ODLabTracker page, https://github.com/ODonnellLab/ODLabTracker
+Project-URL: Bug Reports, https://github.com/sODonnellLab/ODLabTracker/issues
+Project-URL: Source, https://github.com/sODonnellLab/ODLabTracker
+Project-URL: API Reference, https://ODonnellLab.github.io/ODLabTracker/build/html/ODLabTracker.html
+Keywords: toolset,tracking,feeding,behaviour
+Classifier: Development Status :: 1 - Planning
+Classifier: Intended Audience :: Developers
+Classifier: Topic :: Software Development :: Build Tools
+Classifier: License :: OSI Approved :: GNU General Public License v3 (GPLv3)
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3 :: Only
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+Requires-Dist: numpy
+Requires-Dist: scipy
+Requires-Dist: pyampd
+Requires-Dist: pandas
+Requires-Dist: pillow>=10.0.1
+Requires-Dist: pims
+Requires-Dist: scikit-image
+Requires-Dist: trackpy
+Requires-Dist: papermill
+Requires-Dist: matplotlib
+Requires-Dist: ipykernel
+Requires-Dist: imagecodecs
+Requires-Dist: ipyfilechooser
+Requires-Dist: torch
+Requires-Dist: torchvision
+Requires-Dist: tensorflow
+Requires-Dist: imageio>=2.19
+Requires-Dist: imageio-ffmpeg

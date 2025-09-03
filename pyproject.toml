@@ -1,0 +1,76 @@
+[project]
+name = "ODLabTracker"
+dynamic = ["version"]
+description = "Fast and easy worm tracker"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "numpy",
+    "scipy",
+    "pyampd",
+    "pandas",
+    "pillow>=10.0.1",
+    "pims",
+    "scikit-image",
+    "trackpy",
+    "papermill",
+    "matplotlib",
+    "ipykernel",
+    "imagecodecs",
+    "ipyfilechooser",
+    "torch",
+    "torchvision",
+    "tensorflow",
+    "imageio>=2.19",
+    "imageio-ffmpeg"
+]
+license = {file = "LICENSE"}
+keywords = ["toolset", "tracking", "feeding", "behaviour"]
+authors = [
+  {name = "MikeODonnell", email = "mikeod38@gmail.com" }
+]
+maintainers = [
+  {name = "MikeODonnell", email = "mikeod38@gmail.com" }
+]
+# For a list of valid classifiers, see https://pypi.org/classifiers/
+classifiers = [
+
+  "Development Status :: 1 - Planning",
+
+  "Intended Audience :: Developers",
+  "Topic :: Software Development :: Build Tools",
+
+  "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3 :: Only",
+]
+
+# For an analysis of this field vs pip's requirements files see:
+# https://packaging.python.org/discussions/install-requires-vs-requirements/
+# NOTE: dependencies moved to setup.cfg file (see install_requires)
+# For auto generating requirements.txt use:
+# python -m pip install --upgrade pip
+# python -m pip install pip-tools; pip-compile -o requirements.txt pyproject.toml
+# python -m pip install pip-tools; pip-compile -o requirements.txt setup.cfg
+
+# List URLs that are relevant to the project
+# The key is what's used to render the link text on PyPI.
+[project.urls]
+"ODLabTracker page" = "https://github.com/ODonnellLab/ODLabTracker"
+"Bug Reports" = "https://github.com/sODonnellLab/ODLabTracker/issues"
+"Source" = "https://github.com/sODonnellLab/ODLabTracker"
+"API Reference" = "https://ODonnellLab.github.io/ODLabTracker/build/html/ODLabTracker.html"
+
+[build-system]
+# These are the assumed default build requirements from pip:
+# https://pip.pypa.io/en/stable/reference/pip/#pep-517-and-518-support
+# To understand how pyproject.toml work together with the setup.cfg, read:
+# REF1: https://setuptools.readthedocs.io/en/latest/userguide/declarative_config.html
+# REF2: https://github.com/jazzband/pip-tools#versions-and-compatibility
+requires = ["setuptools>=61.0.0", "wheel", "attrs>=17.1"]
+build-backend = "setuptools.build_meta"
