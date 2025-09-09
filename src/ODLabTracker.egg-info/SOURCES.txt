@@ -1,3 +1,4 @@
+README.md
 pyproject.toml
 src/ODLabTracker/tracking.py
 src/ODLabTracker.egg-info/PKG-INFO

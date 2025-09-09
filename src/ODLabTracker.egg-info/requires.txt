@@ -9,6 +9,7 @@ trackpy
 papermill
 matplotlib
 ipykernel
+jupyterlab
 imagecodecs
 ipyfilechooser
 torch
@@ -16,3 +17,4 @@ torchvision
 tensorflow
 imageio>=2.19
 imageio-ffmpeg
+opencv-python

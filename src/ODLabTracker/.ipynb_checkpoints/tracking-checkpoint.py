@@ -30,6 +30,11 @@ def preprocess_frame(img, min_area, max_area, thresh, illumination):
     if not isinstance(img, np.ndarray):
         img = np.array(img)
 
+    # if img.ndim == 3:
+    #     gray = color.rgb2gray(img)
+    # else:
+    #     gray = img
+
     gray = img
 
     # Use provided threshold or compute new one

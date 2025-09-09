@@ -16,13 +16,15 @@ dependencies = [
     "papermill",
     "matplotlib",
     "ipykernel",
+    "jupyterlab",
     "imagecodecs",
     "ipyfilechooser",
     "torch",
     "torchvision",
     "tensorflow",
     "imageio>=2.19",
-    "imageio-ffmpeg"
+    "imageio-ffmpeg",
+    "opencv-python"
 ]
 license = {file = "LICENSE"}
 keywords = ["toolset", "tracking", "feeding", "behaviour"]
@@ -47,6 +49,7 @@ classifiers = [
   "Programming Language :: Python :: 3.9",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3 :: Only",
 ]
 

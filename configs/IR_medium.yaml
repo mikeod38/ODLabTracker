@@ -1,0 +1,8 @@
+min_area: 200 #min area of worm in pixels
+max_area: 2000 #max area of worm in pixels
+gap_range: 8 # max number of frame gap to link worms (i.e. can a worm disappear for more frames?)
+thresh: None # if not 'None', then manual threshold - set to a number (see below) to use if too few worms detected or too many short tracks
+search_range: 60 # max pixel distance to link tracks across frames
+min_length: 25 # minimum length of track in frames to keep
+frame_rate: 10 # FPS - necessary for speed analysis and video writing
+illumination: 0 # illumination source, 0 = white worms on dark (e.g. IR), 1 = dark worms on light. default 0
