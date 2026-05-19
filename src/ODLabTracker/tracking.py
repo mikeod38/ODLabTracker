@@ -690,9 +690,10 @@ def calculate_speed_parameters(df,
 
     df['vx_pixels'] = df.groupby('particle')['x_smooth'].diff()
     df['vy_pixels'] = df.groupby('particle')['y_smooth'].diff()
+    # vx/vy are signed velocity components (mm/s); speed is their scalar magnitude
     df['vx'] = (df['vx_pixels'] / pixel_length) * frame_rate
     df['vy'] = (df['vy_pixels'] / pixel_length) * frame_rate
-    df['speed_instantaneous'] = np.clip(np.sqrt(df['vx']**2 + df['vy']**2), 0, max_instantaneous_speed)
+    df['speed_instantaneous'] = np.sqrt(df['vx']**2 + df['vy']**2).clip(upper=max_instantaneous_speed)
     df['speed'] = (df.groupby('particle')['speed_instantaneous']
                    .transform(lambda x: x.rolling(window_size, min_periods=1, center=True).median()))
     df['displacement_mm'] = np.sqrt(df['vx_pixels']**2 + df['vy_pixels']**2) / pixel_length

@@ -758,9 +758,9 @@ def collect_centroid_results(directory):
 
             per_particle = (
                 df.groupby("particle")["speed"]
-                .mean()
+                .median()
                 .reset_index()
-                .rename(columns={"speed": "mean_speed_mm_s"})
+                .rename(columns={"speed": "median_speed_mm_s"})
             )
             per_particle["video"]     = video_stem
             per_particle["subfolder"] = subfolder
@@ -787,7 +787,7 @@ def collect_centroid_results(directory):
     fig, ax = plt.subplots(figsize=(max(6, n_groups * 1.8 + 2), 5))
 
     for i, sf in enumerate(subfolders):
-        vals  = combined.loc[combined["subfolder"] == sf, "mean_speed_mm_s"].dropna()
+        vals  = combined.loc[combined["subfolder"] == sf, "median_speed_mm_s"].dropna()
         color = palette[i % len(palette)]
         jitter = rng.uniform(-0.18, 0.18, len(vals))
         ax.scatter(i + jitter, vals, alpha=0.5, s=20, color=color,
@@ -797,7 +797,7 @@ def collect_centroid_results(directory):
 
     ax.set_xticks(range(n_groups))
     ax.set_xticklabels(subfolders, rotation=30, ha="right")
-    ax.set_ylabel("Mean speed per particle (mm/s)")
+    ax.set_ylabel("Median speed per particle (mm/s)")
     ax.set_title("Speed summary by condition")
     ax.set_xlim(-0.7, n_groups - 0.3)
     ax.set_ylim(bottom=0)
