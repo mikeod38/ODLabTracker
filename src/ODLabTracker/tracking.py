@@ -758,7 +758,9 @@ def calculate_postural_states(df,
                                reversal_persistence=2,
                                pirouette_speed_threshold=0.3,
                                pirouette_eccentricity_threshold=0.8,
-                               min_pirouette_duration=2):
+                               min_pirouette_duration=2,
+                               area_reliability_threshold=0.70,
+                               merge_reversal_gap=5):
     """Phase 2 (postural mode): add reversal/pirouette/movement_type columns.
     Requires df to have already been through calculate_speed_parameters().
 
@@ -772,6 +774,16 @@ def calculate_postural_states(df,
     Reversal exit: the backward heading is stored at entry; exit fires when current
     movement_angle differs by > π/2 from that stored heading (worm has turned away from
     its reversal direction), or on speed drop, or after 3-second timeout.
+
+    Area reliability gate (area_reliability_threshold): frames where the segmented area
+    drops below this fraction of the particle's median area are flagged unreliable.
+    Reversal entry is blocked on unreliable frames (partial body thresholding or worm
+    partially out of frame give jittery centroids that look like direction reversals).
+
+    Merge gap (merge_reversal_gap): after detection, adjacent reversal events on the same
+    particle separated by ≤ this many frames are merged into one. This repairs splits
+    caused by brief unreliable frames mid-reversal, ensuring a single behavioural event
+    is not double-counted.
     """
     df = df.copy()
     max_reversal_frames = int(3 * frame_rate)
@@ -803,6 +815,13 @@ def calculate_postural_states(df,
         (df['speed'] < pirouette_speed_threshold)
     )
 
+    # ========== AREA RELIABILITY FLAG ==========
+    # Frames where area falls below area_reliability_threshold * per-particle median are
+    # unreliable: partial body thresholding (edge illumination) or worm partially out of
+    # frame cause centroid jitter that mimics a direction reversal. Block entry on these.
+    median_area = df.groupby('particle')['area'].transform('median')
+    df['_reliable_area'] = df['area'] >= area_reliability_threshold * median_area
+
     # ========== REVERSAL DETECTION ==========
     df['is_reversal'] = False
     df['reversal_id'] = 0
@@ -815,7 +834,19 @@ def calculate_postural_states(df,
         speeds = particle_df['speed'].values
         movement_angles = particle_df['movement_angle'].fillna(0).values
         is_pir_frame = particle_df['is_pirouette_frame'].values
+        reliable_area = particle_df['_reliable_area'].values
         n = len(particle_df)
+
+        # Rolling max speed over the half-second immediately preceding each frame
+        # (not including the current frame). Reversal entry requires that the worm
+        # was actively locomoting in this window: worms that have been paused for
+        # ≥ 0.5 s cannot initiate a reversal, so this gate blocks angle-noise
+        # false positives during genuine pauses.
+        entry_lookback = max(int(0.5 * frame_rate), reversal_persistence + 1)
+        recent_max_speed = np.array([
+            speeds[max(0, i - entry_lookback):i].max() if i > 0 else 0.0
+            for i in range(n)
+        ])
 
         is_rev = np.zeros(n, dtype=bool)
         rev_id = np.zeros(n, dtype=int)
@@ -827,13 +858,17 @@ def calculate_postural_states(df,
         pending = 0            # consecutive qualifying frames
 
         for i in range(n):
-            # Entry: large angle from stable mean + not in an omega turn.
+            # Entry: large angle from stable mean + not in an omega turn + reliable area.
             # Speed is NOT required at entry because a reversal always begins with deceleration
             # through near-zero speed; requiring speed > threshold would consistently delay
             # onset detection by 1-2 frames. The angle_from_stable signal plus pirouette
             # exclusion are sufficient to gate entry correctly.
+            # Unreliable-area frames are excluded to prevent centroid jitter from partial
+            # body thresholding (edge of plate, variable illumination) from triggering entry.
             above = (angles[i] > direction_threshold
-                     and not is_pir_frame[i])
+                     and not is_pir_frame[i]
+                     and reliable_area[i]
+                     and recent_max_speed[i] > speed_threshold)
 
             if not in_reversal:
                 if above:
@@ -867,7 +902,37 @@ def calculate_postural_states(df,
         df.loc[mask, 'is_reversal'] = is_rev
         df.loc[mask, 'reversal_id'] = rev_id
 
-    prev_rev = df.groupby('particle')['is_reversal'].shift(1).fillna(False)
+    # ========== MERGE ADJACENT REVERSALS ==========
+    # Brief unreliable frames mid-reversal (area drop, out-of-frame) can cause the exit
+    # condition to fire and re-entry to follow, splitting one behavioural reversal into two
+    # events. Merge pairs of reversal events on the same particle that are separated by
+    # ≤ merge_reversal_gap frames so they are counted as a single reversal.
+    if merge_reversal_gap > 0:
+        for particle in df['particle'].unique():
+            mask = df['particle'] == particle
+            particle_df = df.loc[mask]
+            is_rev = particle_df['is_reversal'].values.copy()
+            rev_id = particle_df['reversal_id'].values.copy()
+            n = len(is_rev)
+
+            # Locate starts and ends of reversal runs (local indices within particle)
+            padded = np.concatenate([[False], is_rev, [False]])
+            starts = np.where(np.diff(padded.astype(int)) == 1)[0]
+            ends   = np.where(np.diff(padded.astype(int)) == -1)[0]  # first non-reversal index
+
+            for k in range(len(starts) - 1):
+                gap = starts[k + 1] - ends[k]  # frames between end of event k and start of k+1
+                if gap <= merge_reversal_gap:
+                    # Fill gap frames with reversal; keep the earlier reversal_id
+                    is_rev[ends[k]:starts[k + 1]] = True
+                    rev_id[ends[k]:starts[k + 1]] = rev_id[ends[k] - 1]
+
+            df.loc[mask, 'is_reversal'] = is_rev
+            df.loc[mask, 'reversal_id'] = rev_id
+
+    df.drop(columns=['_reliable_area'], inplace=True)
+
+    prev_rev = df.groupby('particle')['is_reversal'].shift(1).fillna(False).infer_objects(copy=False)
     df['reversal_start'] = df['is_reversal'] & ~prev_rev
     df['reversal_end'] = ~df['is_reversal'] & prev_rev
 
@@ -1145,15 +1210,6 @@ def create_annotated_video(video_path, df, particle_id, output_folder,
                     colored_mask[object_mask] = color
                     canvas[:height, :width] = cv2.addWeighted(frame, 0.7, colored_mask, 0.3, 0)
 
-            # Trajectory (past 60 frames)
-            past_frames = particle_df[
-                (particle_df['frame'] <= frame_idx) &
-                (particle_df['frame'] > frame_idx - 60)
-            ]
-            if len(past_frames) > 1:
-                points = np.array([[int(r['x']), int(r['y'])] for _, r in past_frames.iterrows()])
-                cv2.polylines(canvas[:height, :width], [points], False, color, 2)
-
             # Transition label
             if prev_movement_type is not None and movement_type != prev_movement_type:
                 transition_text = f"{prev_movement_type} -> {movement_type}"
@@ -1163,12 +1219,22 @@ def create_annotated_video(video_path, df, particle_id, output_folder,
                             cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
             prev_movement_type = movement_type
 
-        # ── Always render right panel using last-known position ──────────────
+        # ── Crop inset from mask-only canvas (before trajectory is drawn) ────
         x_start = max(0, x - source_crop_px)
         x_end   = min(width,  x + source_crop_px)
         y_start = max(0, y - source_crop_px)
         y_end   = min(height, y + source_crop_px)
         crop = canvas[y_start:y_end, x_start:x_end].copy()
+
+        # ── Trajectory on main view only (past 60 frames) ────────────────────
+        if row is not None:
+            past_frames = particle_df[
+                (particle_df['frame'] <= frame_idx) &
+                (particle_df['frame'] > frame_idx - 60)
+            ]
+            if len(past_frames) > 1:
+                points = np.array([[int(r['x']), int(r['y'])] for _, r in past_frames.iterrows()])
+                cv2.polylines(canvas[:height, :width], [points], False, color, 2)
         if crop.shape[0] > 0 and crop.shape[1] > 0:
             crop_resized = cv2.resize(crop, (crop_size, crop_size))
             crop_bordered = cv2.copyMakeBorder(crop_resized, 3, 3, 3, 3,

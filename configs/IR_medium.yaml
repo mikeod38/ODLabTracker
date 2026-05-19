@@ -28,3 +28,5 @@ pirouette_eccentricity_threshold: 0.9 # body becomes rounder at lower values. Mo
 min_pirouette_duration: 4 # minimum number of consecutive frames to call a pirouette
 max_instantaneous_speed: 0.6 # Cap unrealistic speeds mm/sec
 stability_threshold: 0.88 # Very strict stability requirement for movement angles changes 1 = no change in angle
+area_reliability_threshold: 0.70 # block reversal entry when area < this fraction of per-particle median (partial thresholding / out-of-frame guard)
+merge_reversal_gap: 5 # merge adjacent reversal events separated by <= this many frames (repairs splits from brief unreliable frames mid-reversal)

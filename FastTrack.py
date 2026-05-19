@@ -73,6 +73,8 @@ def main(file_path, config_path, verbose=False):
     min_pirouette_duration = config_data['min_pirouette_duration']
     max_instantaneous_speed = config_data['max_instantaneous_speed']
     stability_threshold = config_data['stability_threshold']
+    area_reliability_threshold = config_data.get('area_reliability_threshold', 0.70)
+    merge_reversal_gap = config_data.get('merge_reversal_gap', 5)
     max_objects   = config_data.get('max_objects', None)
     min_thresh    = config_data.get('min_thresh', None)
     mode          = config_data.get('mode', 'postural').strip().lower()
@@ -266,6 +268,8 @@ def main(file_path, config_path, verbose=False):
             pirouette_speed_threshold=pirouette_speed_threshold,
             pirouette_eccentricity_threshold=pirouette_eccentricity_threshold,
             min_pirouette_duration=min_pirouette_duration,
+            area_reliability_threshold=area_reliability_threshold,
+            merge_reversal_gap=merge_reversal_gap,
         )
         tracks.to_csv(os.path.join(result_path, "tracks.csv"), index=False)
 
