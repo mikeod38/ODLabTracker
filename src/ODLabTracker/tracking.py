@@ -1092,6 +1092,7 @@ def create_annotated_video(video_path, df, particle_id, output_folder,
     # Get data for this particle
     particle_df = df[df['particle'] == particle_id].copy()
     particle_df = particle_df.sort_values('frame')
+    particle_median_area = particle_df['area'].median() if 'area' in particle_df.columns else None
     
     if len(particle_df) == 0:
         print(f"No data found for particle {particle_id}")
@@ -1198,6 +1199,11 @@ def create_annotated_video(video_path, df, particle_id, output_folder,
             for prop in props:
                 prop_y, prop_x = prop.centroid
                 dist = np.sqrt((prop_x - x)**2 + (prop_y - y)**2)
+                # Reject objects whose area is outside 50–175 % of this particle's
+                # median area so a nearby worm cannot steal the highlight.
+                if particle_median_area is not None:
+                    if not (0.50 * particle_median_area <= prop.area <= 1.75 * particle_median_area):
+                        continue
                 if dist < min_dist:
                     min_dist = dist
                     best_prop = prop
