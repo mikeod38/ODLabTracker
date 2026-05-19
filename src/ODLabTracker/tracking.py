@@ -1208,7 +1208,7 @@ def create_annotated_video(video_path, df, particle_id, output_folder,
                     min_dist = dist
                     best_prop = prop
 
-            if best_prop is not None and min_dist < 50:
+            if best_prop is not None and min_dist < 25:
                 if show_mask:
                     colored_mask = np.zeros_like(frame)
                     object_mask = np.zeros((height, width), dtype=bool)
