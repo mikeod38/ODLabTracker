@@ -3,12 +3,8 @@
 
 import numpy as np
 import pandas as pd
-import ipyfilechooser
 import os
-import imageio
-import imageio.v3 as iio
 import tifffile
-from PIL import Image
 from skimage.color import rgb2gray
 import yaml
 import time
@@ -17,11 +13,9 @@ import matplotlib as mpl
 import cv2
 import matplotlib.pyplot as plt
 
-from skimage import io, color, filters, morphology, measure
-from skimage.draw import rectangle_perimeter
+from skimage import filters, morphology, measure
 
 import trackpy as tp
-from scipy.ndimage import median_filter
 
 import ODLabTracker
 from ODLabTracker import tracking
@@ -81,6 +75,7 @@ def main(file_path, config_path, verbose=False):
     stability_threshold = config_data['stability_threshold']
     max_objects   = config_data.get('max_objects', None)
     min_thresh    = config_data.get('min_thresh', None)
+    mode          = config_data.get('mode', 'postural').strip().lower()
 
     print(f'{Colors.PURPLE}PARAMETER SETTINGS:{Colors.ENDC}')
     print(f'minimum area of worm in pixels: {Colors.GREEN}{min_area}{Colors.ENDC}')
@@ -108,54 +103,68 @@ def main(file_path, config_path, verbose=False):
 
     ####### 3. Load video ########
     TIFF_EXTENSIONS = {".tif", ".tiff"}
-    file_ext  = os.path.splitext(file_path)[1].lower()
-    iio_plugin = "tifffile" if file_ext in TIFF_EXTENSIONS else "pyav"
-    print(f"Using imageio plugin: {iio_plugin}")
+    file_ext = os.path.splitext(file_path)[1].lower()
+    is_tiff  = file_ext in TIFF_EXTENSIONS
 
-    start_time = time.time()
-    if iio_plugin == "tifffile":
-        tif_file   = tifffile.TiffFile(file_path)
-        num_frames = len(tif_file.pages)
+    if is_tiff:
+        tif_file    = tifffile.TiffFile(file_path)
+        num_frames  = len(tif_file.pages)
         first_frame = tif_file.pages[0].asarray()
         imiter_vid  = (page.asarray() for page in tif_file.pages)
         print(f"TIFF stack: {num_frames} frames, shape {first_frame.shape}, dtype {first_frame.dtype}")
     else:
-        first_frame = iio.imread(file_path, index=0, plugin=iio_plugin)
-        imiter_vid  = iio.imiter(file_path, plugin=iio_plugin)
-        image_props = iio.improps(file_path, plugin=iio_plugin)
-        print(image_props)
-        num_frames  = image_props.shape[0]
-
-    if first_frame.ndim == 3 and first_frame.shape[-1] == 3:
-        print("\n!!!Video is RGB, need to convert to grayscale 8-bit - consider changing video output to this type ahead of time!!!\n")
+        # cv2.VideoCapture reads MJPEG frames as BGR and extracts the Y channel
+        # directly via COLOR_BGR2GRAY — immune to chroma channel values (Cb/Cr),
+        # unlike rgb2gray which weights channels and is sensitive to non-neutral chroma.
+        cap         = cv2.VideoCapture(file_path)
+        num_frames  = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        ret, _bgr   = cap.read()
+        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+        first_frame = cv2.cvtColor(_bgr, cv2.COLOR_BGR2GRAY) if ret else None
+        imiter_vid  = cap
+        print(f"Video: {num_frames} frames, shape {first_frame.shape}, dtype {first_frame.dtype}")
 
     frames = []
 
     if subsample > 1:
-        print(f'Running tracking on {num_frames/subsample} frames from the original {num_frames} frames')
+        print(f'Running tracking on {num_frames / subsample:.0f} frames from the original {num_frames}')
     else:
         print(f'Running full tracking on {num_frames} frames')
 
     with np.errstate(invalid='ignore', divide='ignore', over='ignore'):
         start_time = time.time()
-        for i, frame in enumerate(imiter_vid):
-            if i % subsample == 0:
-                print(f"\rKeeping frame: {i}", end="", flush=True)
-                time.sleep(0.001)
-                if frame.ndim == 3 and frame.shape[-1] == 3:
-                    if i / subsample == 1:
-                        print(" converting to grayscale images")
-                    frame = rgb2gray(frame)
-                    frame = (frame * 255).astype(np.uint8)
-                elif frame.ndim == 2:
-                    if i / subsample == 1:
-                        print("already grayscale, converting to 8-bit")
-                    frame = frame.astype(np.uint8)
-                frames.append(frame)
+
+        if is_tiff:
+            for i, frame in enumerate(imiter_vid):
+                if i % subsample == 0:
+                    print(f"\rKeeping frame: {i}", end="", flush=True)
+                    time.sleep(0.001)
+                    if frame.ndim == 3 and frame.shape[-1] == 3:
+                        frame = rgb2gray(frame)
+                        frame = (frame * 255).astype(np.uint8)
+                    else:
+                        frame = frame.astype(np.uint8)
+                    frames.append(frame)
+        else:
+            i = 0
+            while True:
+                ret, bgr = imiter_vid.read()
+                if not ret:
+                    break
+                if i % subsample == 0:
+                    print(f"\rKeeping frame: {i}", end="", flush=True)
+                    time.sleep(0.001)
+                    frames.append(cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY))
+                i += 1
+            imiter_vid.release()
+
         end_time = time.time()
         print(f"  Reading in {len(frames)} frames took {end_time - start_time:.1f} seconds")
 
     first_frame = frames[0]
+    print(f"  [diag] raw frame[0]: dtype={first_frame.dtype}  "
+          f"min={first_frame.min()}  max={first_frame.max()}  "
+          f"mean={first_frame.mean():.1f}")
 
     ####### 4. Background subtraction ########
     if backsub:
@@ -167,14 +176,27 @@ def main(file_path, config_path, verbose=False):
             frame_to_add = tracking.convert_8bit(frames[i])
             backsub_frame += frame_to_add.astype(np.float32)
         average_frame = (backsub_frame / backsub_frames).astype(np.uint8)
+        print(f"  [diag] average_frame: min={average_frame.min()}  "
+              f"max={average_frame.max()}  mean={average_frame.mean():.1f}")
         plt.figure()
         plt.imshow(average_frame, cmap="gray")
         plt.show(block=False)
 
-        subtracted = [tracking.subtract_background(f, average_frame=average_frame)
+        subtracted = [tracking.subtract_background(f, average_frame=average_frame, normalize=False)
                       for f in frames]
         frames = subtracted
         first_frame = subtracted[0]
+        print(f"  [diag] subtracted frame[0]: min={first_frame.min()}  "
+              f"max={first_frame.max()}  mean={first_frame.mean():.1f}")
+
+        if min_thresh is None:
+            noise_est  = float(np.std(average_frame))
+            min_thresh = int(np.ceil(2 * noise_est))
+            print(f"  [diag] background noise σ={noise_est:.2f}  "
+                  f"→ auto min_thresh={min_thresh}")
+        else:
+            print(f"  [diag] using config min_thresh={min_thresh} "
+                  f"(background σ={np.std(average_frame):.2f})")
 
     ####### 5. Tracking ########
     print(f"Tracking and linking objects from {len(frames)} frames")
@@ -198,51 +220,21 @@ def main(file_path, config_path, verbose=False):
     print(f'removing tracks shorter than {min_length} frames')
     tracks = tracking.filter_short_tracks(tracks, min_length=min_length)
 
-    ####### 6. Postural analysis ########
-    print("calculating speed and movement states")
-
-    tracks = tracking.calculate_motion_parameters(
+    ####### 6. Phase 1: speed parameters (centroid + postural modes) ########
+    print(f"calculating speed parameters ({mode} mode)")
+    tracks = tracking.calculate_speed_parameters(
         tracks,
         pixel_length=pixel_length,
         frame_rate=frame_rate,
         window_size=window_size,
-        direction_threshold=direction_threshold,
         speed_threshold=speed_threshold,
-        min_run_length=min_run_length,
         smooth_window=smooth_window,
         min_displacement_for_angle=min_displacement_for_angle,
-        pirouette_speed_threshold=pirouette_speed_threshold,
-        pirouette_eccentricity_threshold=pirouette_eccentricity_threshold,
-        min_pirouette_duration=min_pirouette_duration,
         max_instantaneous_speed=max_instantaneous_speed,
         stability_threshold=stability_threshold
     )
 
-    ####### 7. Annotated video ########
-    print("Finding particle with all behaviors for demonstration video")
-    best_particle = tracking.find_particle_with_all_behaviors(tracks)
-
-    if best_particle is not None:
-        print(f"Creating annotated video for particle {best_particle}")
-        output_video = tracking.create_annotated_video(
-            video_path=file_path,
-            df=tracks,
-            particle_id=best_particle,
-            output_folder=result_path,
-            pixel_length=pixel_length,
-            frame_rate=frame_rate,
-            global_thresh=global_thresh,
-            min_area=min_area,
-            max_area=max_area,
-            illumination=illumination,
-            crop_size=150,
-            show_mask=True
-        )
-        print(f"Annotated video saved to {output_video}")
-    else:
-        print("No particle found with all three behaviors — skipping annotated video")
-
-    ####### 8. Summary ########
+    ####### 7. Summary, trajectory plot, and CSV ########
     counts = tracks.groupby("particle")["frame"].count()
     print('Mean track length is ', np.ceil(np.mean(counts) / 2), ' frames')
     print('Minimum track length is ', int(min(counts)))
@@ -260,6 +252,43 @@ def main(file_path, config_path, verbose=False):
 
     print(f'saving tracked centroids to {os.path.join(result_path, "tracks.csv")}')
     tracks.to_csv(os.path.join(result_path, "tracks.csv"), index=False)
+
+    ####### 8. Phase 2: postural states (postural mode only) ########
+    if mode == 'postural':
+        print("calculating postural states (reversals, pirouettes)")
+        tracks = tracking.calculate_postural_states(
+            tracks,
+            frame_rate=frame_rate,
+            direction_threshold=direction_threshold,
+            speed_threshold=speed_threshold,
+            min_run_length=min_run_length,
+            pirouette_speed_threshold=pirouette_speed_threshold,
+            pirouette_eccentricity_threshold=pirouette_eccentricity_threshold,
+            min_pirouette_duration=min_pirouette_duration,
+        )
+        tracks.to_csv(os.path.join(result_path, "tracks.csv"), index=False)
+
+        print("Finding particle with all behaviors for demonstration video")
+        best_particle = tracking.find_particle_with_all_behaviors(tracks)
+        if best_particle is not None:
+            print(f"Creating annotated video for particle {best_particle}")
+            output_video = tracking.create_annotated_video(
+                video_path=file_path,
+                df=tracks,
+                particle_id=best_particle,
+                output_folder=result_path,
+                pixel_length=pixel_length,
+                frame_rate=frame_rate,
+                global_thresh=global_thresh,
+                min_area=min_area,
+                max_area=max_area,
+                illumination=illumination,
+                crop_size=150,
+                show_mask=True
+            )
+            print(f"Annotated video saved to {output_video}")
+        else:
+            print("No particle found with all three behaviors — skipping annotated video")
 
 
 if __name__ == "__main__":

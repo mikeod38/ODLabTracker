@@ -39,6 +39,7 @@ from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import numpy as np
+import yaml
 
 VIDEO_EXTENSIONS      = {".avi", ".mp4", ".tif", ".tiff"}
 QUIESCENT_IPI_THRESH  = 1.0     # seconds — unambiguous pump-miss boundary (20 frames at 20 fps)
@@ -716,6 +717,99 @@ def collect_pumping_results(directory, metadata_path=None):
     print(f"  [collect] Report      → {md_out}")
 
 
+def collect_centroid_results(directory):
+    """Collect tracks.csv files from centroid/postural runs and plot mean speed by subfolder."""
+    try:
+        import pandas as pd
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError as e:
+        print(f"  [collect] skipping — missing dependency: {e}")
+        return
+
+    directory    = Path(directory).resolve()
+    tracks_files = sorted(directory.rglob("tracks.csv"))
+
+    if not tracks_files:
+        print("  [collect] No tracks.csv files found — skipping.")
+        return
+
+    print(f"\n  [collect] Found {len(tracks_files)} result(s) — building speed summary")
+
+    frames = []
+    for tracks_path in tracks_files:
+        # top-level subfolder relative to the search directory (e.g. N2, cest-2.1, tbh-1)
+        rel        = tracks_path.relative_to(directory)
+        subfolder  = rel.parts[0]
+        video_stem = tracks_path.parent.name
+        if video_stem.endswith("_results"):
+            video_stem = video_stem[: -len("_results")]
+
+        # Skip results from annotated MP4s or notAnalyzed folders
+        if "_annotated" in video_stem or "notAnalyzed" in tracks_path.parts:
+            continue
+
+        try:
+            df = pd.read_csv(tracks_path)
+            if "speed" not in df.columns:
+                print(f"  [collect] No speed column in {tracks_path.name} — skipping")
+                continue
+
+            per_particle = (
+                df.groupby("particle")["speed"]
+                .mean()
+                .reset_index()
+                .rename(columns={"speed": "mean_speed_mm_s"})
+            )
+            per_particle["video"]     = video_stem
+            per_particle["subfolder"] = subfolder
+            frames.append(per_particle)
+        except Exception as exc:
+            print(f"  [collect] Warning: could not read {tracks_path}: {exc}")
+
+    if not frames:
+        print("  [collect] No valid speed data found.")
+        return
+
+    combined = pd.concat(frames, ignore_index=True)
+
+    csv_out = directory / "batch_speed_summary.csv"
+    combined.to_csv(csv_out, index=False)
+    print(f"  [collect] Batch CSV → {csv_out}")
+
+    # ── Strip plot ────────────────────────────────────────────────────────────
+    subfolders = sorted(combined["subfolder"].unique())
+    n_groups   = len(subfolders)
+    rng        = np.random.default_rng(42)
+    palette    = plt.cm.tab10.colors
+
+    fig, ax = plt.subplots(figsize=(max(6, n_groups * 1.8 + 2), 5))
+
+    for i, sf in enumerate(subfolders):
+        vals  = combined.loc[combined["subfolder"] == sf, "mean_speed_mm_s"].dropna()
+        color = palette[i % len(palette)]
+        jitter = rng.uniform(-0.18, 0.18, len(vals))
+        ax.scatter(i + jitter, vals, alpha=0.5, s=20, color=color,
+                   linewidths=0, zorder=2)
+        ax.plot([i - 0.32, i + 0.32], [np.median(vals)] * 2,
+                color="black", lw=2.5, zorder=3)
+
+    ax.set_xticks(range(n_groups))
+    ax.set_xticklabels(subfolders, rotation=30, ha="right")
+    ax.set_ylabel("Mean speed per particle (mm/s)")
+    ax.set_title("Speed summary by condition")
+    ax.set_xlim(-0.7, n_groups - 0.3)
+    ax.set_ylim(bottom=0)
+    ax.spines[["top", "right"]].set_visible(False)
+
+    plt.tight_layout()
+    plot_out = directory / "batch_speed_summary.png"
+    fig.savefig(plot_out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  [collect] Plot → {plot_out}")
+
+
 # ── main ─────────────────────────────────────────────────────────────────────
 
 def main():
@@ -743,7 +837,15 @@ def main():
         sys.exit(1)
 
     if args.summary_only:
-        collect_pumping_results(directory, metadata_path=args.metadata)
+        if args.config:
+            with open(args.config) as f:
+                config_mode = yaml.safe_load(f).get("mode", "postural").strip().lower()
+        else:
+            config_mode = "pumping"
+        if config_mode == "pumping":
+            collect_pumping_results(directory, metadata_path=args.metadata)
+        else:
+            collect_centroid_results(directory)
         return
 
     if not args.config:
@@ -759,6 +861,9 @@ def main():
         f for f in directory.rglob("*")
         if f.suffix.lower() in VIDEO_EXTENSIONS
         and not f.stem.endswith("_pumping")
+        and not f.stem.endswith("_annotated")
+        and "_results"     not in f.parts
+        and "notAnalyzed"  not in f.parts
     )
 
     if not video_files:
@@ -796,8 +901,14 @@ def main():
     if n_err:
         print("Check logs/ for details on failed jobs.")
 
+    with open(config) as f:
+        config_mode = yaml.safe_load(f).get("mode", "postural").strip().lower()
+
     if args.collect_summary:
-        collect_pumping_results(directory, metadata_path=args.metadata)
+        if config_mode == "pumping":
+            collect_pumping_results(directory, metadata_path=args.metadata)
+        else:
+            collect_centroid_results(directory)
 
 
 if __name__ == "__main__":

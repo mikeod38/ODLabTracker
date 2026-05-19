@@ -1,3 +1,4 @@
+mode: postural # analysis mode: centroid (fast: CoM + speed), postural (+ reversals/pirouettes), pumping (pharyngeal pumping)
 min_area: 500 #min area of worm in pixels
 max_area: 3000 #max area of worm in pixels
 gap_range: 8 # max number of frame gap to link worms (i.e. can a worm disappear for more frames?)

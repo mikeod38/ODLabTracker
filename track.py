@@ -50,7 +50,7 @@ def main():
     file_path = get_file_path(args.filename)
     print(f"Processing file: {file_path}")
 
-    if mode == 'postural':
+    if mode in ('postural', 'centroid'):
         from FastTrack import main as run_postural
         run_postural(file_path, config_path, verbose=args.verbose)
 
@@ -59,7 +59,7 @@ def main():
         run_pumping(file_path, config_path, verbose=args.verbose)
 
     else:
-        print(f"ERROR: Unknown mode '{mode}' in config. Choose 'postural' or 'pumping'.")
+        print(f"ERROR: Unknown mode '{mode}' in config. Choose 'centroid', 'postural', or 'pumping'.")
         sys.exit(1)
 
 
