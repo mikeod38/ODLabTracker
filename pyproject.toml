@@ -21,7 +21,8 @@ dependencies = [
     "imageio>=2.19",
     "imageio-ffmpeg",
     "opencv-python",
-    "pyampd"
+    "pyampd",
+    "hmmlearn"
 ]
 license = {file = "LICENSE"}
 keywords = ["toolset", "tracking", "feeding", "behaviour"]

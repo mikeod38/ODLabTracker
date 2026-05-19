@@ -24,6 +24,7 @@ jupyterlab = "*"
 ipyfilechooser = "*"
 opencv-python = "*"
 odlabtracker = {file = ".", editable = true}
+hmmlearn = "*"
 
 [dev-packages]
 

@@ -262,6 +262,7 @@ def main(file_path, config_path, verbose=False):
             direction_threshold=direction_threshold,
             speed_threshold=speed_threshold,
             min_run_length=min_run_length,
+            reversal_persistence=reversal_persistence,
             pirouette_speed_threshold=pirouette_speed_threshold,
             pirouette_eccentricity_threshold=pirouette_eccentricity_threshold,
             min_pirouette_duration=min_pirouette_duration,
@@ -283,7 +284,7 @@ def main(file_path, config_path, verbose=False):
                 min_area=min_area,
                 max_area=max_area,
                 illumination=illumination,
-                crop_size=150,
+                crop_size=300,
                 show_mask=True
             )
             print(f"Annotated video saved to {output_video}")
