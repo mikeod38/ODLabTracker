@@ -82,24 +82,28 @@ def load_recording(results_dir, frame_rate, min_speed=0.0):
     per_p = grp.agg(n_frames=("frame", "count"), all_frame_speed=("speed", "mean"))
     per_p["duration_min"] = per_p["n_frames"] / frame_rate / 60
 
-    # Forward-run speed: mean of speed during forward_run frames only.
+    # Forward-run speed: median of speed during forward_run frames per particle.
     # Using all-frame mean for the slow-worm filter so injured/stationary
     # particles are still caught even if they have no forward_run frames.
     if "movement_type" in df.columns:
         fwd = df[df["movement_type"] == "forward_run"]
-        fwd_speed = fwd.groupby("particle")["speed"].mean()
+        fwd_speed = fwd.groupby("particle")["speed"].median()
         per_p["fwd_speed"] = fwd_speed
     else:
         per_p["fwd_speed"] = per_p["all_frame_speed"]
 
     if "reversal_start" in df.columns:
-        per_p["reversal_rate"] = grp["reversal_start"].sum() / per_p["duration_min"]
+        per_p["n_reversals"]   = grp["reversal_start"].sum()
+        per_p["reversal_rate"] = per_p["n_reversals"] / per_p["duration_min"]
     else:
+        per_p["n_reversals"]   = 0
         per_p["reversal_rate"] = np.nan
 
     if "pirouette_start" in df.columns:
-        per_p["pirouette_rate"] = grp["pirouette_start"].sum() / per_p["duration_min"]
+        per_p["n_pirouettes"]   = grp["pirouette_start"].sum()
+        per_p["pirouette_rate"] = per_p["n_pirouettes"] / per_p["duration_min"]
     else:
+        per_p["n_pirouettes"]   = 0
         per_p["pirouette_rate"] = np.nan
 
     n_total = len(per_p)
@@ -113,9 +117,11 @@ def load_recording(results_dir, frame_rate, min_speed=0.0):
         return None
 
     return {
-        "speed":              per_p["fwd_speed"].median(),    # forward-run speed, median across particles
+        "speed":              per_p["fwd_speed"].median(),
         "reversal_rate":      per_p["reversal_rate"].mean(),
         "pirouette_rate":     per_p["pirouette_rate"].mean(),
+        "n_reversals":        int(per_p["n_reversals"].sum()),
+        "n_pirouettes":       int(per_p["n_pirouettes"].sum()),
         "n_particles":        n,
         "n_excluded":         n_total - n,
     }
@@ -192,19 +198,19 @@ def add_normalization(df):
 
 def genotype_order(df):
     """
-    Sort mutants by mean normalized reversal rate (date-matched recordings only).
+    Sort mutants by mean normalized speed (date-matched recordings only), slowest first.
     N2 placed at top. Genotypes with no date-matched recordings sorted by raw
-    reversal rate and placed at the bottom of the mutant list.
+    speed and placed at the bottom of the mutant list.
     """
     mutants = df[df["genotype"] != N2_FOLDER]
 
-    matched = mutants[mutants["reversal_rate_date_matched"]]
+    matched = mutants[mutants["speed_date_matched"]]
     unmatched_only = mutants[~mutants["genotype"].isin(matched["genotype"].unique())]
 
-    matched_order = (matched.groupby("genotype")["reversal_rate_norm"]
+    matched_order = (matched.groupby("genotype")["speed_norm"]
                      .mean().sort_values().index.tolist())
 
-    unmatched_order = (unmatched_only.groupby("genotype")["reversal_rate"]
+    unmatched_order = (unmatched_only.groupby("genotype")["speed"]
                        .mean().sort_values().index.tolist())
 
     return unmatched_order + matched_order + [N2_FOLDER]
@@ -249,6 +255,10 @@ def make_plot(df, order, out_path):
     fig.suptitle("Nawaphat locomotion off food — postural comparison (fold-change vs N2)",
                  fontsize=12, y=1.01)
 
+    # Precompute per-genotype event totals for annotation
+    event_cols = {"reversal_rate": ("n_reversals", "n_particles"),
+                  "pirouette_rate": ("n_pirouettes", "n_particles")}
+
     for ax, metric in zip(axes, METRICS):
         norm_col    = f"{metric}_norm"
         matched_col = f"{metric}_date_matched"
@@ -283,6 +293,18 @@ def make_plot(df, order, out_path):
                     color=dc, lw=2.5, solid_capstyle="round", zorder=4)
             ax.plot(mean, y, "D", color=dc, ms=7, zorder=5,
                     mec="white", mew=0.5)
+
+        # Annotate reversal and pirouette panels with n_events / n_worms per genotype
+        if metric in event_cols:
+            ev_col, n_col = event_cols[metric]
+            for geno in order:
+                y      = ytick[geno]
+                g_rows = df[df["genotype"] == geno]
+                n_ev   = int(g_rows[ev_col].sum())
+                n_worm = int(g_rows[n_col].sum())
+                ax.text(1.01, y, f"{n_ev}/{n_worm}",
+                        transform=ax.get_yaxis_transform(),
+                        fontsize=5.5, va="center", ha="left", color="#555555")
 
         ax.axvline(1.0, color="gray", lw=0.8, ls="--", alpha=0.5, zorder=0)
         ax.set_xlabel(METRIC_LABELS[metric], fontsize=9)
@@ -357,7 +379,9 @@ def main():
 
     # Save CSV
     csv_out = os.path.join(args.out_dir, "postural_comparison.csv")
-    col_order = (["genotype", "date", "n_particles"] + METRICS
+    col_order = (["genotype", "date", "n_particles",
+                  "n_reversals", "n_pirouettes", "n_excluded"]
+                 + METRICS
                  + [f"{m}_norm" for m in METRICS]
                  + [f"{m}_date_matched" for m in METRICS]
                  + ["results_dir"])

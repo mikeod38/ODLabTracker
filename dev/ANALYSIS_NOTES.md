@@ -5,6 +5,55 @@ Most recent session first.
 
 ---
 
+## Session: 2026-05-20 (continued) — Frame-gap bug, speed QC, genotype comparison
+
+### Frame-gap speed inflation bug (tracking.py)
+- **Bug**: trackpy linking introduces gaps where `frame.diff()` returns N (not 1).
+  Dividing vx/vy by 1 frame time inflated speed N-fold at every gap.
+  These inflated values clipped to `max_instantaneous_speed = 0.6`, causing a spike
+  at 0.6 mm/s and corrupting the rolling median and all downstream postural states.
+- **Fix** (`calculate_speed_parameters()`): compute `_frame_gap = frame.diff().fillna(1).clip(lower=1)`,
+  divide vx/vy by `_frame_gap` before clipping. Dropped from dict before returning df.
+- Confirmed: with the fix the 0.6 spike disappears; per-particle median speeds are ~0.13–0.26 mm/s.
+
+### Forward-run speed: mean → median
+- `fwd_speed` per particle changed from `.mean()` to `.median()` for robustness.
+- Speed reported in comparison plot = median across particles (per-recording).
+
+### N2 QC: censored Mar 11 and Mar 12
+- **Mar 12 / 20260312**: p99 CV unchanged (0.0435 → 0.0435) — normalization completely
+  failed. Speed anomalously low (67 µm/s). Excluded as clear artifact.
+- **Mar 11 / 20260311**: normalization succeeded but speed anomalously low (84 µm/s).
+  No obvious artifact; conservative exclusion to avoid pulling down grand-mean N2.
+  No other genotypes on either date, so cross-genotype impact is zero.
+- Both added to `data/nawaphat_postural_results/exclude.csv`.
+
+### Speed weighting QC (dev/qc_speed_weighting.py → plots 35, 36)
+- Compared per-particle median vs frame-pooled median across all N2 dates.
+- Frame-pooled median is duration-weighted (longer tracks dominate more).
+- Difference is small (<10% on most dates) and no systematic direction — weighting
+  choice does not explain the Jan vs March speed difference.
+- Track length vs speed scatter (plot 36): no consistent length-speed bias across videos.
+  A few videos show mild positive correlation but not enough to explain outlier dates.
+- **Conclusion**: cannot find an artifactual explanation for the Jan vs March speed difference.
+  Likely reflects genuine biological or batch differences (worm age, prep).
+
+### Batch retrack: all 32 genotypes
+- 131 videos retracked with updated tracking.py (frame-gap fix + boundary margin).
+- 12 NAS workers caused I/O saturation; for future retracks use 4–6 workers.
+- Two failures: bas-1/20260307 and cat-1/20260120 — both already in exclude.csv.
+- Final dataset: 117 recordings, 32 genotypes, 13709 total particles (after exclusions).
+
+### Genotype comparison changes (batch_postural_comparison.py)
+- **Sort order**: mutants now sorted by mean normalized speed (slowest first) instead of reversal rate.
+  Unmatched genotypes (no same-date N2) sorted by raw speed and placed at bottom.
+- **Event annotation**: reversal and pirouette panels now annotate each genotype row with
+  `n(events)/n(worms)` (sum across all recordings for that genotype) in small gray text.
+- **Supplementary table**: `postural_comparison.csv` now includes `n_reversals`, `n_pirouettes`,
+  and `n_excluded` columns for upload as supplementary data.
+
+---
+
 ## Session: 2026-05-20 — Memory fix, profiling, N2 batch retrack
 
 ### Memory crash & fix
