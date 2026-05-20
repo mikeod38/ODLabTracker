@@ -720,13 +720,17 @@ def calculate_speed_parameters(df,
 
     df['vx_pixels'] = df.groupby('particle')['x_smooth'].diff()
     df['vy_pixels'] = df.groupby('particle')['y_smooth'].diff()
+    # Divide by actual frame gap so speed is correct across trackpy linking gaps
+    # (diff spans N frames but default assumes 1 frame, inflating speed N-fold)
+    df['_frame_gap'] = df.groupby('particle')['frame'].diff().fillna(1).clip(lower=1)
     # vx/vy are signed velocity components (mm/s); speed is their scalar magnitude
-    df['vx'] = (df['vx_pixels'] / pixel_length) * frame_rate
-    df['vy'] = (df['vy_pixels'] / pixel_length) * frame_rate
+    df['vx'] = (df['vx_pixels'] / pixel_length) * frame_rate / df['_frame_gap']
+    df['vy'] = (df['vy_pixels'] / pixel_length) * frame_rate / df['_frame_gap']
     df['speed_instantaneous'] = np.sqrt(df['vx']**2 + df['vy']**2).clip(upper=max_instantaneous_speed)
     df['speed'] = (df.groupby('particle')['speed_instantaneous']
                    .transform(lambda x: x.rolling(window_size, min_periods=1, center=True).median()))
-    df['displacement_mm'] = np.sqrt(df['vx_pixels']**2 + df['vy_pixels']**2) / pixel_length
+    df['displacement_mm'] = np.sqrt(df['vx_pixels']**2 + df['vy_pixels']**2) / pixel_length / df['_frame_gap']
+    df = df.drop(columns=['_frame_gap'])
 
     df['movement_angle'] = np.nan
     significant_motion = df['displacement_mm'] > min_displacement_for_angle

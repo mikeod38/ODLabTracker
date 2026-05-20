@@ -144,8 +144,8 @@ def plot_area_distributions(records, out_path):
 def main():
     records = load_all(DATA_DIR)
     print(f"Loaded {len(records)} videos")
-    plot_speed_distributions(records, "dev/qc_n2_speed_distributions.png")
-    plot_area_distributions(records,  "dev/qc_n2_area_distributions.png")
+    plot_speed_distributions(records, "data/nawaphat_postural_results/32_qc_n2_speed_distributions.png")
+    plot_area_distributions(records,  "data/nawaphat_postural_results/33_qc_n2_area_distributions.png")
 
 
 if __name__ == "__main__":

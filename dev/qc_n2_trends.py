@@ -18,7 +18,7 @@ DATA_DIR = (
     "/Volumes/User Homes/ODlab-user/UserFolders/Nawaphat"
     "/6 CEST-2.1/Locomotion_Off food/0_COMPLETE!!/N2"
 )
-OUT_PATH = "dev/qc_n2_trends.png"
+OUT_PATH = "data/nawaphat_postural_results/31_qc_n2_trends.png"
 
 
 def date_from_path(path):

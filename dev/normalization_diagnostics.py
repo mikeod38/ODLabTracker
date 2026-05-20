@@ -8,8 +8,8 @@ are visible, with corrected versions overlaid:
     raw signal (fast flicker visible) + fast-corrected flat reference
 
   Figure 2 — p99 (worm-pixel brightness):
-    raw p99 (fast + slow oscillations) + after-fast-correction (slow drift
-    only) + 10 s low-pass envelope (slow component captured by pass 2)
+    raw p99 (faint) + slow envelope (dashed) + fully corrected (both passes,
+    should be flat if normalization is working)
 
 CV (std/mean) is shown before and after each correction stage.
 
@@ -33,8 +33,8 @@ DATA_DIR = (
     "/6 CEST-2.1/Locomotion_Off food/0_COMPLETE!!/N2"
 )
 CONFIG  = "configs/IR_medium.yaml"
-OUT_MED = "dev/normalization_median_timeseries.png"
-OUT_P99 = "dev/normalization_p99_timeseries.png"
+OUT_MED = "data/nawaphat_postural_results/29_normalization_median_timeseries.png"
+OUT_P99 = "data/nawaphat_postural_results/30_normalization_p99_timeseries.png"
 NCOLS   = 5
 
 
@@ -170,8 +170,8 @@ def plot_p99_figure(records, out_path):
     nrows, ncols = make_grid(n, NCOLS)
     fig, axes = plt.subplots(nrows, ncols, figsize=(ncols * 3.5, nrows * 2.6), sharey=False)
     fig.suptitle(
-        "Per-frame bright-pixel percentile — raw / after fast-correction / slow envelope\n"
-        "Slow drift visible after fast correction; 10 s low-pass envelope should track it",
+        "Per-frame bright-pixel percentile — raw vs fully corrected (both passes)\n"
+        "Slow envelope shown as dashed; corrected should be flat if normalization works",
         fontsize=11
     )
     axes = np.array(axes).flatten()
@@ -182,17 +182,15 @@ def plot_p99_figure(records, out_path):
         pct  = stats["pct_label"]
 
         cv_raw   = cv(stats["bright_raw"])
-        cv_fast  = cv(stats["bright_after_fast"])
         cv_final = cv(stats["bright_final"])
 
-        ax.plot(t, stats["bright_raw"],        color=col,      linewidth=0.5, alpha=0.5,  label=f"{pct} raw")
-        ax.plot(t, stats["bright_after_fast"], color=col,      linewidth=0.7, alpha=0.9,  label="after fast")
-        ax.plot(t, stats["p_slow"],            color="black",  linewidth=1.2, linestyle="--", alpha=0.85, label=f"slow env (win={stats['win']}fr)")
-        ax.axhline(np.mean(stats["bright_final"]), color="red", linewidth=0.7, linestyle=":", alpha=0.7, label="target ref")
+        ax.plot(t, stats["bright_raw"],    color=col,     linewidth=0.5, alpha=0.4, label=f"{pct} raw")
+        ax.plot(t, stats["p_slow"],        color="black", linewidth=1.0, linestyle="--", alpha=0.7, label=f"slow env (win={stats['win']}fr)")
+        ax.plot(t, stats["bright_final"],  color=col,     linewidth=0.8, alpha=0.95, label="corrected")
 
         ax.set_title(
             f"{label}  [{pct}]\n"
-            f"CV: raw={cv_raw:.4f} → fast={cv_fast:.4f} → final={cv_final:.4f}",
+            f"CV: raw={cv_raw:.4f} → final={cv_final:.4f}",
             fontsize=7.5
         )
         ax.set_xlabel("Time (s)", fontsize=7)
