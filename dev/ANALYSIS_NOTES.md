@@ -1,0 +1,111 @@
+# ODLabTracker — Analysis Session Notes
+
+Running log of conclusions, decisions, and open questions from each session.
+Most recent session first.
+
+---
+
+## Session: 2026-05-20 — Memory fix, profiling, N2 batch retrack
+
+### Memory crash & fix
+- Root cause: illumination normalization converted entire frame buffer to float32
+  (`frames = [f.astype(np.float32) for f in frames]`), quadrupling RAM per worker.
+  With 12 workers this caused an OOM crash.
+- Fix: compute normalization scale factors analytically from uint8 frame statistics
+  (percentile scales linearly with a scalar: `p99(f × s) = p99(f) × s`), then apply
+  the combined fast+slow scale one frame at a time, immediately converting back to uint8.
+  Background subtraction likewise processes one frame at a time.
+- Result: frame buffer stays at uint8 throughout (~2.5 GB for 1800-frame N2 video);
+  peak float32 usage is one frame. 12-worker batch run now succeeds.
+
+### Two-pass normalization — confirmed working
+- **Pass 1 (fast)**: per-frame median correction. Scale factor = ref_median / frame_median.
+  Removes high-frequency LED flicker (irregular, frame-to-frame).
+- **Pass 2 (slow)**: p99 (or p90 fallback) smoothed over 10 s window captures slow drift
+  in worm-pixel brightness. Scale factor = ref_slow / p_slow.
+- Both scale factors computed from raw uint8 statistics; combined and applied in one pass.
+- Verified against normalization_comparison.png reference (Mar 6: p99 CV 0.0465→0.0048,
+  Mar 7: 0.0400→0.0070). Streaming refactor produces identical results.
+- Most Jan–Feb recordings: fast correction alone is sufficient (no slow drift detected).
+  Mar 6 and Mar 7 are the primary videos where the slow correction matters.
+
+### Per-video profiling (Jan 21 N2, 1800 frames)
+| Step                        | Time   | RSS    |
+|-----------------------------|--------|--------|
+| Load frames (uint8)         | 5.4 s  | 2.49 GB |
+| Illumination normalization  | 9.6 s  | 2.95 GB |
+| Background subtraction      | 2.2 s  | 3.34 GB |
+| Detection (regionprops)     | 28.5 s | 2.99 GB |
+| Link tracks (trackpy)       | 0.1 s  | 3.00 GB |
+| Speed parameters            | 0.1 s  | — |
+| Trajectory plot + CSV       | 1.9 s  | — |
+| Postural states + CSV       | 1.9 s  | — |
+| **Annotated video**         | **62.1 s** | 3.19 GB |
+- Detection is the dominant compute step; annotated video re-reads the entire video and
+  dominates wall time. Disabled in batch runs via `save_annotated_video: false`.
+
+### New config options (IR_medium.yaml)
+- `normalize_illumination: true` — two-pass normalization (was already set)
+- `save_annotated_video: false` — skip 60 s annotated video step in batch
+- `boundary_margin: null` — auto = half median major_axis (~half worm body length)
+- `max_area_cv: null` — disabled by default; ~0.4 would filter fragmented tracks
+
+### Boundary margin filter
+- Removes particles whose median centroid is within `boundary_margin` px of any frame edge.
+- Auto-margin uses **half** the median `major_axis` (~half worm body length).
+  One full body length was too conservative; half lets worms approach the edge without
+  their centroid being censored.
+- Implemented in `tracking.filter_boundary_particles()`.
+
+### Per-frame Otsu vs global threshold
+- Tested on Jan 21 (1800 frames, after normalization + backsub).
+- Global Otsu from frame 0 = 41; per-frame mean = 39.1 ± 1.29 (range 36–43).
+- Detection count std: 1.98 (global) vs 1.85 (per-frame) — negligible difference.
+- **Conclusion**: normalization + backsub stabilises the histogram sufficiently.
+  Per-frame Otsu not worth adding. Global threshold is appropriate.
+- Note: using a temporal median frame for Otsu would NOT work — worm pixels regress
+  to background in the temporal median, giving a unimodal (background-only) histogram.
+
+### N2 batch QC trends (27 videos, Jan 20 – Mar 12 2026)
+- Speed: ~0.15–0.26 mm/s in Jan–Feb; drops to ~0.07–0.12 mm/s in March recordings.
+- Area: ~200–280 px² in most recordings; elevated in Jan 22–24 and Mar 6–7 (~370–430 px²).
+  March recordings appear to be a distinct batch — different zoom or worm age.
+- Track length: erratic (46–456 frames median). Short-track days (Mar 6, Mar 12, Jan 20)
+  correlate with high particle counts → many fragmented detections.
+- N worms: Feb 6 (333) and Feb 18 (319) are outliers (~3× typical). Likely debris/false
+  detections that the boundary filter or area_cv filter may help remove.
+- Jan 20 excluded from most analyses (bright outer ring artifact from 20260120 recording;
+  confirmed as censored in earlier session).
+
+---
+
+## Session: 2026-05 (earlier) — Reversal detection, annotated video, batch reanalysis
+
+### Reversal detection improvements
+- Added area gate and speed gate to reduce false reversal calls.
+- Merge adjacent reversals within `merge_reversal_gap` frames to repair splits
+  from brief unreliable frames mid-reversal.
+- `reversal_persistence`: consecutive qualifying frames required to confirm onset;
+  filters single-frame spikes from forward-filled movement_angle during pauses.
+
+### Annotated video mask snapping
+- Tightened mask search radius from 50 px to 25 px to avoid snapping to nearby worm.
+
+### Illumination normalization origin
+- Problem: irregular LED flicker + slow oscillation in worm-pixel brightness
+  (p99 std ~85–90% larger than post-correction).
+- First identified on Mar 6 and Mar 7 recordings.
+- normalization_comparison.png in dev/ shows the before/after for those two videos.
+
+---
+
+## Open questions / TODO
+
+- [ ] Why does Mar 12 show almost no improvement from slow correction
+      (CV 0.0435→0.0435)? Possibly a different instability type not captured by 10 s window.
+- [ ] Zoom calibration for March recordings — confirm whether pixel_length differs.
+      Speed and area both elevated in Mar 6/7, suggesting different magnification.
+- [ ] Feb 6 and Feb 18 outlier particle counts — check whether boundary/area_cv filters
+      bring them in line with other recordings.
+- [ ] 2-state HMM needs retraining with quiescent-enriched data (~20–30% IPIs > 1 s).
+      AMPD fires false peaks during quiescence; use scipy IPIs for HMM state classification.

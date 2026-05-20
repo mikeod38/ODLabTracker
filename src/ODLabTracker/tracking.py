@@ -496,8 +496,8 @@ def filter_short_tracks(tracks, min_length=10):
 def filter_boundary_particles(tracks, frame_shape, margin_px):
     """Remove particles whose median centroid is within margin_px of any frame edge.
 
-    Censors LED-ring artifacts and plate-edge detections. Use one worm-length
-    (~major_axis median) as margin_px.
+    Censors LED-ring artifacts and plate-edge detections. Use half a worm-length
+    (~major_axis median / 2) as margin_px.
 
     Parameters
     ----------

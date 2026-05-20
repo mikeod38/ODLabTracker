@@ -288,11 +288,11 @@ def main(file_path, config_path, verbose=False):
     tracks = tracking.filter_short_tracks(tracks, min_length=min_length)
 
     # Censor particles near the frame edge (LED ring + plate boundary).
-    # None = auto-compute margin from median detected major_axis (~one worm length).
+    # None = auto-compute margin as half the median major_axis (~half worm length).
     _margin = boundary_margin
     if _margin is None and 'major_axis' in detections.columns and len(detections):
-        _margin = float(np.median(detections['major_axis']))
-        print(f'  auto boundary_margin = {_margin:.0f} px (median major axis)')
+        _margin = float(np.median(detections['major_axis'])) / 2
+        print(f'  auto boundary_margin = {_margin:.0f} px (half median major axis)')
     if _margin and _margin > 0:
         tracks, _ = tracking.filter_boundary_particles(
             tracks, frame_shape=first_frame.shape[:2], margin_px=_margin)
