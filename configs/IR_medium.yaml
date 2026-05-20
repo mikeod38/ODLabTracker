@@ -1,4 +1,4 @@
-mode: centroid # analysis mode: centroid (fast: CoM + speed), postural (+ reversals/pirouettes), pumping (pharyngeal pumping)
+mode: postural # analysis mode: centroid (fast: CoM + speed), postural (+ reversals/pirouettes), pumping (pharyngeal pumping)
 min_area: 150 #min area of worm in pixels
 max_area: 700 #max area of worm in pixels
 gap_range: 8 # max number of frame gap to link worms (i.e. can a worm disappear for more frames?)
@@ -12,6 +12,7 @@ subsample: 1 # frames to keep (1/n frames), will speed up analysis of videos wit
 backsub: True # for IR illumination, this works much better
 backsub_frames: 20 # number of evenly-spaced frames to subtract background
 pixel_length: 60 # number of pixels/mm
+normalize_illumination: true # per-frame median-brightness normalization to correct illumination flicker before background subtraction
 speed_threshold: 0.03 # minimum speed to be considered moving (mm/sec)
 min_displacement_for_angle: 0.001  # Ignore angle when moving < n mm between frames 
 

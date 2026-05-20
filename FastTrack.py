@@ -78,6 +78,7 @@ def main(file_path, config_path, verbose=False):
     max_objects   = config_data.get('max_objects', None)
     min_thresh    = config_data.get('min_thresh', None)
     mode          = config_data.get('mode', 'postural').strip().lower()
+    normalize_illumination = config_data.get('normalize_illumination', False)
 
     print(f'{Colors.PURPLE}PARAMETER SETTINGS:{Colors.ENDC}')
     print(f'minimum area of worm in pixels: {Colors.GREEN}{min_area}{Colors.ENDC}')
@@ -168,28 +169,76 @@ def main(file_path, config_path, verbose=False):
           f"min={first_frame.min()}  max={first_frame.max()}  "
           f"mean={first_frame.mean():.1f}")
 
+    ####### 3b. Per-frame illumination normalization (flickering fix) ########
+    if normalize_illumination:
+        from scipy.ndimage import uniform_filter1d
+
+        # Convert all frames to float32 so all corrections are lossless.
+        frames = [f.astype(np.float32) for f in frames]
+
+        # ── Pass 1: per-frame median correction (fast/irregular LED flicker) ──
+        # Done first on raw frames so pass 2 sees only the slow residual in p99.
+        ref_fast = float(np.median([np.median(f) for f in frames]))
+        if ref_fast > 1:
+            n_fast = 0
+            for i in range(len(frames)):
+                fm = float(np.median(frames[i]))
+                if fm > 1:
+                    scale = ref_fast / fm
+                    if abs(scale - 1.0) > 0.01:
+                        frames[i] = frames[i] * scale
+                        n_fast += 1
+            print(f"  Fast correction (per-frame median): ref={ref_fast:.1f}  "
+                  f"corrected {n_fast}/{len(frames)} frames")
+
+        # ── Pass 2: slow-drift correction via smoothed p99 (or p90 fallback) ──
+        # After the fast correction, the remaining p99 variation is the slow
+        # oscillation that affects worm-pixel brightness but not background.
+        # Smooth over ~30 s to isolate that slow component, then normalise.
+        p99s = np.array([float(np.percentile(f, 99)) for f in frames])
+        pct_used = 99
+        if np.std(p99s) < 2.0:   # p99 is flat/saturated — fall back to p90
+            p99s = np.array([float(np.percentile(f, 90)) for f in frames])
+            pct_used = 90
+            print("  p99 appears flat/saturated, using p90 for slow correction")
+        win_slow = max(3, int(frame_rate * 10))  # 10-second smoothing window
+        p_slow = uniform_filter1d(p99s, size=win_slow, mode='reflect')
+        ref_slow = float(np.mean(p_slow))
+        n_slow = 0
+        for i in range(len(frames)):
+            scale = ref_slow / p_slow[i]
+            if abs(scale - 1.0) > 0.005:
+                frames[i] = frames[i] * scale
+                n_slow += 1
+        print(f"  Slow correction (p{pct_used}, win={win_slow}fr={win_slow/frame_rate:.0f}s): "
+              f"ref={ref_slow:.1f}  corrected {n_slow}/{len(frames)} frames")
+
+        first_frame = frames[0]
+
     ####### 4. Background subtraction ########
     if backsub:
         print("Subtracting background")
-        backsub_frame = np.zeros_like(first_frame, dtype=np.float32)
+        backsub_frame = np.zeros(first_frame.shape, dtype=np.float32)
         frame_list = np.linspace(1, num_frames - 1, backsub_frames, dtype=int)
         print("Frames to average for background:", frame_list)
         for i in frame_list:
-            frame_to_add = tracking.convert_8bit(frames[i])
-            backsub_frame += frame_to_add.astype(np.float32)
-        average_frame = (backsub_frame / backsub_frames).astype(np.uint8)
-        print(f"  [diag] average_frame: min={average_frame.min()}  "
-              f"max={average_frame.max()}  mean={average_frame.mean():.1f}")
+            backsub_frame += frames[i].astype(np.float32)
+        average_frame = backsub_frame / backsub_frames  # float32, preserves precision
+        print(f"  [diag] average_frame: min={average_frame.min():.1f}  "
+              f"max={average_frame.max():.1f}  mean={average_frame.mean():.1f}")
+        bg_save_path = os.path.join(result_path, "background.png")
+        cv2.imwrite(bg_save_path, np.clip(average_frame, 0, 255).astype(np.uint8))
+        print(f"  Saved background frame: {bg_save_path}")
         plt.figure()
         plt.imshow(average_frame, cmap="gray")
         plt.show(block=False)
 
-        subtracted = [tracking.subtract_background(f, average_frame=average_frame, normalize=False)
-                      for f in frames]
-        frames = subtracted
-        first_frame = subtracted[0]
-        print(f"  [diag] subtracted frame[0]: min={first_frame.min()}  "
-              f"max={first_frame.max()}  mean={first_frame.mean():.1f}")
+        # Float32 subtraction — no int16 overflow, negative values clipped to 0.
+        for i in range(len(frames)):
+            frames[i] = np.clip(frames[i].astype(np.float32) - average_frame, 0, None)
+        first_frame = frames[0]
+        print(f"  [diag] subtracted frame[0]: min={first_frame.min():.1f}  "
+              f"max={first_frame.max():.1f}  mean={first_frame.mean():.1f}")
 
         if min_thresh is None:
             noise_est  = float(np.std(average_frame))
