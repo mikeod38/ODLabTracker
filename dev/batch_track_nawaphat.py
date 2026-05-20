@@ -211,6 +211,9 @@ def main():
                         help="zoom_calibration.csv (from dev/zoom_calibration.py). "
                              "When given, per-date pixel_length and search_range "
                              "override the base config for each recording.")
+    parser.add_argument('--genotype', default=None,
+                        help="Only process this genotype folder (e.g. 'N2'). "
+                             "Matches the subfolder name exactly.")
     args = parser.parse_args()
 
     config_path = os.path.abspath(args.config)
@@ -229,6 +232,15 @@ def main():
     do_track = args.mode in ('track-missing', 'all')
     do_reanalyze = args.mode in ('reanalyze-all', 'all')
 
+    if args.genotype:
+        # Point data_dir directly at the single genotype subfolder so that
+        # find_all_videos / find_existing_results treat it as the only entry.
+        # We wrap it in a temp structure by overriding data_dir to parent and
+        # filtering after collection.
+        _geno_filter = args.genotype
+    else:
+        _geno_filter = None
+
     if do_retrack_all:
         videos_to_track = find_all_videos(args.data_dir)
     elif do_track:
@@ -236,6 +248,10 @@ def main():
     else:
         videos_to_track = []
     existing = find_existing_results(args.data_dir) if do_reanalyze else []
+
+    if _geno_filter:
+        videos_to_track = [(g, p) for g, p in videos_to_track if g == _geno_filter]
+        existing        = [(g, p) for g, p in existing        if g == _geno_filter]
 
     if args.limit is not None:
         videos_to_track = videos_to_track[:args.limit]

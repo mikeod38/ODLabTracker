@@ -493,6 +493,36 @@ def filter_short_tracks(tracks, min_length=10):
     keep_ids = counts[counts >= min_length].index
     return tracks[tracks["particle"].isin(keep_ids)].copy()
 
+def filter_boundary_particles(tracks, frame_shape, margin_px):
+    """Remove particles whose median centroid is within margin_px of any frame edge.
+
+    Censors LED-ring artifacts and plate-edge detections. Use one worm-length
+    (~major_axis median) as margin_px.
+
+    Parameters
+    ----------
+    tracks : pd.DataFrame  with 'particle', 'x', 'y' columns
+    frame_shape : (H, W) tuple — shape of the video frames
+    margin_px : float — exclusion zone width in pixels from each frame edge
+
+    Returns
+    -------
+    filtered : pd.DataFrame
+    n_removed : int — number of particles removed
+    """
+    H, W = frame_shape
+    grp = tracks.groupby("particle")
+    med_x = grp["x"].median()
+    med_y = grp["y"].median()
+    dist_to_edge = pd.concat([med_x, W - med_x, med_y, H - med_y], axis=1).min(axis=1)
+    keep = dist_to_edge[dist_to_edge >= margin_px].index
+    n_removed = len(dist_to_edge) - len(keep)
+    if n_removed:
+        print(f"  filter_boundary_particles: removed {n_removed} particles "
+              f"with median centroid within {margin_px:.0f} px of frame edge")
+    return tracks[tracks["particle"].isin(keep)].copy(), n_removed
+
+
 def stitch_tracks(tracks, max_gap_frames, max_gap_pixels):
     """Post-hoc track stitching: merge track fragments where one ends close in
     space and time to where another begins.
@@ -747,6 +777,15 @@ def calculate_speed_parameters(df,
     )
     df['stable_run_counter'] = (df.groupby('particle')['is_directionally_stable']
                                  .transform(_count_consecutive_true))
+
+    # Per-particle area stability: CV of area across all frames.
+    # After illumination normalisation, real worms should have low CV;
+    # fragmented tracks or false detections show high CV.
+    if 'area' in df.columns:
+        grp_area = df.groupby('particle')['area']
+        area_mean = grp_area.transform('mean')
+        area_std  = grp_area.transform('std').fillna(0)
+        df['area_cv'] = area_std / (area_mean + 1e-6)
     return df
 
 

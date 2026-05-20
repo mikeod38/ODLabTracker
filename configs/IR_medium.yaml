@@ -31,3 +31,6 @@ max_instantaneous_speed: 0.6 # Cap unrealistic speeds mm/sec
 stability_threshold: 0.88 # Very strict stability requirement for movement angles changes 1 = no change in angle
 area_reliability_threshold: 0.70 # block reversal entry when area < this fraction of per-particle median (partial thresholding / out-of-frame guard)
 merge_reversal_gap: 5 # merge adjacent reversal events separated by <= this many frames (repairs splits from brief unreliable frames mid-reversal)
+boundary_margin: null   # px from frame edge to censor (null = auto from median major_axis, ~one worm length)
+max_area_cv: null       # max within-track area CV to keep (null = disabled; try 0.4 to remove fragmented tracks)
+save_annotated_video: false # set true to generate per-worm annotated video (slow: ~60s/video)
