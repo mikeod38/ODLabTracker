@@ -15,3 +15,4 @@ logs/
 dev/*.png
 pumping_signal_diagnostic.png
 dev/hmm_pumping_analysis.md
+data/nawaphat_postural_results/
