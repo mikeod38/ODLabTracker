@@ -1,22 +1,23 @@
 """
 Batch postural comparison for Nawaphat's 0_COMPLETE!! locomotion dataset.
 
-For each _results/tracks.csv, computes per-particle rates then averages to a
-single per-recording mean. Normalizes to same-date N2 (fold-change). Recordings
-without a same-date N2 are normalized to the grand-mean N2 and plotted with open
-symbols — they are included visually but excluded from genotype mean ± SEM.
+Per-recording summaries are built from per-particle stats (forward-run speed,
+reversal rate, pirouette rate).  Statistics use a linear mixed model (LME) with
+per-particle observations and nested random effects (1|date) + (1|date:recording)
+— this uses all available data and accounts for date-to-date and plate-to-plate
+variability without pre-normalizing the data.
+
+Fold-change reference: per-recording N2 grand mean (matching the dot display).
 
 Outputs:
-    <out-dir>/postural_comparison.csv   per-recording summary table
-    <out-dir>/postural_comparison.png   horizontal strip plot (3 panels)
+    <out-dir>/postural_comparison.csv        per-recording summary table
+    <out-dir>/postural_comparison_stats.csv  LME coefficients and q-values
+    <out-dir>/postural_comparison.png        horizontal strip plot (3 panels)
+    <out-dir>/postural_comparison_speed_dist.png  per-recording speed distributions
 
 Exclusion file (--exclude):
     CSV with columns genotype,date (YYYYMMDD). Matching recordings are dropped
     before normalization and plotting. Lines starting with # are ignored.
-    Example:
-        genotype,date
-        bas-1,20260207
-        bas-1,20260307
 
 Usage:
     python dev/batch_postural_comparison.py
@@ -33,6 +34,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.lines as mlines
+from scipy import stats as sp_stats
 
 DATA_DIR = (
     "/Volumes/User Homes/ODlab-user/UserFolders/Nawaphat"
@@ -48,27 +50,29 @@ METRIC_LABELS = {
     "reversal_rate":  "Reversal rate\n(fold-change vs N2)",
     "pirouette_rate": "Pirouette rate\n(fold-change vs N2)",
 }
+# Map analysis metric name → column name in per-particle DataFrame
+METRIC_COL = {
+    "speed":          "fwd_speed",
+    "reversal_rate":  "reversal_rate",
+    "pirouette_rate": "pirouette_rate",
+}
 
 
 # ── per-recording loader ─────────────────────────────────────────────────────
 
-def load_recording(results_dir, frame_rate, min_speed=0.0):
+def _parse_tracks(results_dir, frame_rate, min_speed=0.0):
     """
-    Read tracks.csv and return per-recording stats, or None if unusable.
-
-    Rates are computed per particle (events / track-duration-in-minutes) then
-    averaged across particles, so short tracks don't dilute long ones.
-
-    Particles with mean_speed < min_speed are excluded before aggregation to
-    remove injured/stationary worms that bias the mean and inflate reversal
-    rates through centroid jitter.  Speed is reported as the median across
-    particles (robust to the remaining speed distribution tail).
+    Shared parsing logic.  Returns per-particle DataFrame with columns:
+        fwd_speed, reversal_rate, pirouette_rate, all_frame_speed, n_frames
+    or None if the file is missing / unusable.
+    Particles with all_frame_speed < min_speed are excluded.
     """
     csv_path = os.path.join(results_dir, "tracks.csv")
     if not os.path.exists(csv_path):
         return None
 
-    needed = {"frame", "particle", "speed", "movement_type", "reversal_start", "pirouette_start"}
+    needed = {"frame", "particle", "speed", "movement_type",
+              "reversal_start", "pirouette_start"}
     try:
         df = pd.read_csv(csv_path, usecols=lambda c: c in needed)
     except Exception as e:
@@ -82,13 +86,9 @@ def load_recording(results_dir, frame_rate, min_speed=0.0):
     per_p = grp.agg(n_frames=("frame", "count"), all_frame_speed=("speed", "mean"))
     per_p["duration_min"] = per_p["n_frames"] / frame_rate / 60
 
-    # Forward-run speed: median of speed during forward_run frames per particle.
-    # Using all-frame mean for the slow-worm filter so injured/stationary
-    # particles are still caught even if they have no forward_run frames.
     if "movement_type" in df.columns:
         fwd = df[df["movement_type"] == "forward_run"]
-        fwd_speed = fwd.groupby("particle")["speed"].median()
-        per_p["fwd_speed"] = fwd_speed
+        per_p["fwd_speed"] = fwd.groupby("particle")["speed"].median()
     else:
         per_p["fwd_speed"] = per_p["all_frame_speed"]
 
@@ -106,32 +106,64 @@ def load_recording(results_dir, frame_rate, min_speed=0.0):
         per_p["n_pirouettes"]   = 0
         per_p["pirouette_rate"] = np.nan
 
-    n_total = len(per_p)
-
-    # Drop barely-moving particles (injured/stationary — jitter inflates reversal rate)
     if min_speed > 0:
         per_p = per_p[per_p["all_frame_speed"] >= min_speed]
 
-    n = len(per_p)
-    if n == 0:
-        return None
+    return per_p.reset_index(drop=True) if not per_p.empty else None
 
+
+def load_recording(results_dir, frame_rate, min_speed=0.0):
+    """Return per-recording summary dict, or None if unusable."""
+    per_p = _parse_tracks(results_dir, frame_rate, min_speed)
+    if per_p is None or per_p.empty:
+        return None
     return {
-        "speed":              per_p["fwd_speed"].median(),
-        "reversal_rate":      per_p["reversal_rate"].mean(),
-        "pirouette_rate":     per_p["pirouette_rate"].mean(),
-        "n_reversals":        int(per_p["n_reversals"].sum()),
-        "n_pirouettes":       int(per_p["n_pirouettes"].sum()),
-        "n_particles":        n,
-        "n_excluded":         n_total - n,
+        "speed":          per_p["fwd_speed"].median(),
+        "reversal_rate":  per_p["reversal_rate"].mean(),
+        "pirouette_rate": per_p["pirouette_rate"].mean(),
+        "n_reversals":    int(per_p["n_reversals"].sum()),
+        "n_pirouettes":   int(per_p["n_pirouettes"].sum()),
+        "n_particles":    len(per_p),
+        "n_excluded":     0,
     }
 
 
-# ── dataset scanner ──────────────────────────────────────────────────────────
+def load_recording_particles(results_dir, frame_rate, min_speed=0.0):
+    """Return per-particle DataFrame (fwd_speed, reversal_rate, pirouette_rate), or None."""
+    per_p = _parse_tracks(results_dir, frame_rate, min_speed)
+    if per_p is None or per_p.empty:
+        return None
+    return per_p[["fwd_speed", "reversal_rate", "pirouette_rate"]].copy()
 
-def scan_dataset(data_dir, frame_rate, min_speed=0.0):
-    """Return DataFrame with one row per successfully loaded recording."""
-    rows = []
+
+def _parse_fwd_frames(results_dir, min_speed=0.0):
+    """
+    Return per-forward-run-frame DataFrame (frame, particle, speed), or None.
+
+    Only particles passing the min_speed all-frame mean gate are included.
+    """
+    csv_path = os.path.join(results_dir, "tracks.csv")
+    if not os.path.exists(csv_path):
+        return None
+    needed = {"frame", "particle", "speed", "movement_type"}
+    try:
+        df = pd.read_csv(csv_path, usecols=lambda c: c in needed)
+    except Exception:
+        return None
+    if df.empty or "movement_type" not in df.columns:
+        return None
+    if min_speed > 0:
+        per_p  = df.groupby("particle")["speed"].mean()
+        valid  = per_p[per_p >= min_speed].index
+        df     = df[df["particle"].isin(valid)]
+    fwd = df[df["movement_type"] == "forward_run"][["frame", "particle", "speed"]].copy()
+    return fwd if not fwd.empty else None
+
+
+# ── dataset scanners ─────────────────────────────────────────────────────────
+
+def _iter_recordings(data_dir):
+    """Yield (geno, date, fname, results_dir) for every AVI with a _results dir."""
     for geno in sorted(os.listdir(data_dir)):
         gdir = os.path.join(data_dir, geno)
         if not os.path.isdir(gdir) or geno == "placeholder" or geno.startswith("._"):
@@ -142,28 +174,75 @@ def scan_dataset(data_dir, frame_rate, min_speed=0.0):
             m = re.match(r"^(\d{8})", fname)
             if not m:
                 continue
-            date = m.group(1)
-            stem = os.path.splitext(fname)[0]
+            date        = m.group(1)
+            stem        = os.path.splitext(fname)[0]
             results_dir = os.path.join(gdir, stem + "_results")
-            stats = load_recording(results_dir, frame_rate, min_speed=min_speed)
-            if stats is None:
-                print(f"  Skipping {geno}/{fname} (no tracks.csv or empty)")
-                continue
-            rows.append({"genotype": geno, "date": date,
-                         "results_dir": results_dir, **stats})
+            yield geno, date, fname, results_dir
 
+
+def scan_dataset(data_dir, frame_rate, min_speed=0.0):
+    """Return DataFrame with one row per successfully loaded recording."""
+    rows = []
+    for geno, date, fname, results_dir in _iter_recordings(data_dir):
+        stats = load_recording(results_dir, frame_rate, min_speed=min_speed)
+        if stats is None:
+            print(f"  Skipping {geno}/{fname} (no tracks.csv or empty)")
+            continue
+        rows.append({"genotype": geno, "date": date,
+                     "results_dir": results_dir, **stats})
     return pd.DataFrame(rows)
+
+
+def scan_dataset_particles(data_dir, frame_rate, exclusions=None, min_speed=0.0):
+    """Return per-particle DataFrame with genotype, date, recording_id columns."""
+    if exclusions is None:
+        exclusions = set()
+    chunks = []
+    for geno, date, _fname, results_dir in _iter_recordings(data_dir):
+        if (geno, date) in exclusions:
+            continue
+        particles = load_recording_particles(results_dir, frame_rate, min_speed=min_speed)
+        if particles is None:
+            continue
+        particles["genotype"]     = geno
+        particles["date"]         = date
+        particles["recording_id"] = f"{geno}##{date}"
+        chunks.append(particles)
+    return pd.concat(chunks, ignore_index=True) if chunks else pd.DataFrame()
+
+
+def scan_dataset_fwd_frames(data_dir, frame_rate, exclusions=None, min_speed=0.0):
+    """
+    Return per-forward-run-frame DataFrame for the speed LME.
+
+    Columns: speed, genotype, date, recording_id, particle_uid.
+    particle_uid is globally unique: '<geno>##<date>##p<particle_num>'.
+    """
+    if exclusions is None:
+        exclusions = set()
+    chunks = []
+    for geno, date, _fname, results_dir in _iter_recordings(data_dir):
+        if (geno, date) in exclusions:
+            continue
+        fwd = _parse_fwd_frames(results_dir, min_speed=min_speed)
+        if fwd is None or fwd.empty:
+            continue
+        rec_id           = f"{geno}##{date}"
+        fwd              = fwd.copy()
+        fwd["genotype"]     = geno
+        fwd["date"]         = date
+        fwd["recording_id"] = rec_id
+        fwd["particle_uid"] = rec_id + "##p" + fwd["particle"].astype(str)
+        chunks.append(fwd[["speed", "genotype", "date", "recording_id", "particle_uid"]])
+    return pd.concat(chunks, ignore_index=True) if chunks else pd.DataFrame()
 
 
 # ── normalization ────────────────────────────────────────────────────────────
 
 def add_normalization(df):
     """
-    For each metric add <metric>_norm (fold-change vs N2) and <metric>_date_matched
-    (True = same-date N2 used; False = grand-mean N2 used).
-
-    N2 recordings are normalized to the grand N2 mean so their scatter reflects
-    actual day-to-day variability rather than collapsing to 1.0.
+    For each metric add <metric>_norm (fold-change vs N2) and <metric>_date_matched.
+    N2 recordings are normalized to the grand N2 mean so they scatter around 1.0.
     """
     n2_rows = df[df["genotype"] == N2_FOLDER]
     if n2_rows.empty:
@@ -176,18 +255,14 @@ def add_normalization(df):
         date_ref_map = n2_by_date[metric].to_dict()
         grand_ref    = n2_grand[metric]
 
-        # Map each recording's date to its N2 reference
-        same_date_ref = df["date"].map(date_ref_map)           # NaN where no same-date N2
+        same_date_ref = df["date"].map(date_ref_map)
         date_matched  = same_date_ref.notna()
 
-        # N2 rows: always use grand mean so they scatter around 1.0
         is_n2 = df["genotype"] == N2_FOLDER
-        same_date_ref[is_n2]  = grand_ref
-        date_matched[is_n2]   = True   # treat as "matched" for mean/SEM inclusion
+        same_date_ref[is_n2] = grand_ref
+        date_matched[is_n2]  = True
 
-        # Fill remaining NaN (non-N2 without same-date N2) with grand mean
         ref = same_date_ref.fillna(grand_ref)
-
         df[f"{metric}_norm"]         = df[metric] / ref
         df[f"{metric}_date_matched"] = date_matched
 
@@ -197,23 +272,10 @@ def add_normalization(df):
 # ── genotype sort order ──────────────────────────────────────────────────────
 
 def genotype_order(df):
-    """
-    Sort mutants by mean normalized speed (date-matched recordings only), slowest first.
-    N2 placed at top. Genotypes with no date-matched recordings sorted by raw
-    speed and placed at the bottom of the mutant list.
-    """
-    mutants = df[df["genotype"] != N2_FOLDER]
-
-    matched = mutants[mutants["speed_date_matched"]]
-    unmatched_only = mutants[~mutants["genotype"].isin(matched["genotype"].unique())]
-
-    matched_order = (matched.groupby("genotype")["speed_norm"]
-                     .mean().sort_values().index.tolist())
-
-    unmatched_order = (unmatched_only.groupby("genotype")["speed"]
-                       .mean().sort_values().index.tolist())
-
-    return unmatched_order + matched_order + [N2_FOLDER]
+    """Sort all genotypes by mean raw speed, ascending (slowest at bottom, fastest at top)."""
+    return (df.groupby("genotype")["speed"]
+              .mean().sort_values(ascending=True)
+              .index.tolist())
 
 
 # ── exclusion loader ─────────────────────────────────────────────────────────
@@ -234,20 +296,219 @@ def load_exclusions(path):
     return excluded
 
 
-# ── figure ───────────────────────────────────────────────────────────────────
+# ── statistics ──────────────────────────────────────────────────────────────
 
-# Individual recording dots
+def _bh_correct(pvals):
+    """Benjamini-Hochberg FDR correction; returns q-values."""
+    pvals = np.asarray(pvals, dtype=float)
+    n = len(pvals)
+    order = np.argsort(pvals)
+    rank = np.empty(n, dtype=int)
+    rank[order] = np.arange(1, n + 1)
+    q = pvals * n / rank
+    q_sorted = q[order]
+    for i in range(n - 2, -1, -1):
+        q_sorted[i] = min(q_sorted[i], q_sorted[i + 1])
+    q[order] = q_sorted
+    return np.clip(q, 0, 1)
+
+
+def _stars(q):
+    if pd.isna(q):
+        return ""
+    if q < 0.001:
+        return "***"
+    if q < 0.01:
+        return "**"
+    if q < 0.05:
+        return "*"
+    return ""
+
+
+def _safe_geno(name):
+    """Make a genotype name safe for use in a patsy formula."""
+    return "g_" + re.sub(r"[^a-zA-Z0-9]", "_", name)
+
+
+def fit_lme_stats(frame_df, particle_df, order, metrics, out_dir):
+    """
+    Fit LME models via R/lme4 + lmerTest and return a tidy stats DataFrame.
+
+    Speed (per-forward-run-frame):
+        speed ~ genotype + (1|date) + (1|recording_id) + (1|particle_uid)
+
+    Reversal rate / pirouette rate (per-particle):
+        rate ~ genotype + (1|date) + (1|recording_id)
+
+    Using recording_id as the outermost explicit grouping sets N_eff to the
+    number of plates (~3 per genotype).  The (1|date) random intercept
+    absorbs day-to-day variability shared by N2 and mutant recordings on the
+    same date; this controls for batch effects without being collinear with
+    the genotype fixed effect (unlike a recording-vc nested inside date).
+    The (1|particle_uid) in the speed model accounts for within-particle frame
+    correlation and weights each particle by its number of forward-run frames.
+
+    lmerTest Satterthwaite df approximation gives correct small-sample p-values
+    whose df reflect the number of recordings, not the number of particles.
+
+    Fold-change is expressed relative to the LME model intercept (the N2
+    baseline estimated by the model), which is consistent with the model scale.
+
+    Returns DataFrame: genotype, metric, n_recordings, n_particles,
+                       fold_change, fc_lo, fc_hi, p_raw, q, stars.
+    """
+    import subprocess
+
+    # ── write input CSVs ──────────────────────────────────────────────────────
+    frame_csv    = os.path.join(out_dir, "_lme_fwd_frames.csv")
+    particle_csv = os.path.join(out_dir, "_lme_particles.csv")
+    results_csv  = os.path.join(out_dir, "_lme_results.csv")
+    r_script_path = os.path.join(out_dir, "_lme_fit.R")
+
+    frame_df.to_csv(frame_csv, index=False)
+    particle_df[["reversal_rate", "pirouette_rate",
+                 "genotype", "date", "recording_id"]].to_csv(particle_csv, index=False)
+
+    # ── R script ──────────────────────────────────────────────────────────────
+    r_script = f"""
+suppressMessages(library(lme4))
+suppressMessages(library(lmerTest))
+
+n2_ref <- "{N2_FOLDER}"
+
+extract_coefs <- function(fit, metric) {{
+  s        <- as.data.frame(coef(summary(fit)))
+  s$term   <- rownames(s)
+  s$metric <- metric
+  rownames(s) <- NULL
+  colnames(s) <- c("estimate", "se", "df", "t_value", "p_value", "term", "metric")
+  s
+}}
+
+# ── speed: per-forward-run-frame ────────────────────────────────────────────
+cat("Fitting speed model...\\n")
+fdf             <- read.csv("{frame_csv}", stringsAsFactors = FALSE)
+fdf$genotype    <- relevel(as.factor(fdf$genotype), ref = n2_ref)
+speed_fit       <- lmer(speed ~ genotype + (1|date) + (1|recording_id) + (1|particle_uid),
+                        data = fdf, REML = TRUE,
+                        control = lmerControl(optimizer = "bobyqa"))
+cat("Speed model done.\\n")
+
+# ── reversal rate: per-particle ─────────────────────────────────────────────
+cat("Fitting reversal rate model...\\n")
+pdf             <- read.csv("{particle_csv}", stringsAsFactors = FALSE)
+pdf_rev         <- pdf[!is.na(pdf$reversal_rate), ]
+pdf_rev$genotype <- relevel(as.factor(pdf_rev$genotype), ref = n2_ref)
+rev_fit         <- lmer(reversal_rate ~ genotype + (1|date) + (1|recording_id),
+                        data = pdf_rev, REML = TRUE,
+                        control = lmerControl(optimizer = "bobyqa"))
+cat("Reversal rate model done.\\n")
+
+# ── pirouette rate: per-particle ─────────────────────────────────────────────
+cat("Fitting pirouette rate model...\\n")
+pdf_pir          <- pdf[!is.na(pdf$pirouette_rate), ]
+pdf_pir$genotype <- relevel(as.factor(pdf_pir$genotype), ref = n2_ref)
+pir_fit          <- lmer(pirouette_rate ~ genotype + (1|date) + (1|recording_id),
+                         data = pdf_pir, REML = TRUE,
+                         control = lmerControl(optimizer = "bobyqa"))
+cat("Pirouette rate model done.\\n")
+
+# ── collect results ──────────────────────────────────────────────────────────
+results <- rbind(
+  extract_coefs(speed_fit,  "speed"),
+  extract_coefs(rev_fit,    "reversal_rate"),
+  extract_coefs(pir_fit,    "pirouette_rate")
+)
+# strip "genotype" prefix to recover factor level name
+results$genotype <- sub("^genotype", "", results$term)
+
+write.csv(results, "{results_csv}", row.names = FALSE)
+cat("Results written to {results_csv}\\n")
+"""
+
+    with open(r_script_path, "w") as f:
+        f.write(r_script)
+
+    print("  Running lme4 in R (speed model may take a few minutes)…")
+    proc = subprocess.run(
+        ["R", "--no-save", "--quiet", "-f", r_script_path],
+        capture_output=True, text=True, timeout=900
+    )
+    # Print R stdout (progress messages)
+    for line in proc.stdout.strip().splitlines():
+        print(f"    [R] {line}")
+    if proc.returncode != 0:
+        print(proc.stderr[-2000:], file=sys.stderr)
+        raise RuntimeError("lme4 fitting failed — see R stderr above")
+
+    # ── parse lme4 output ─────────────────────────────────────────────────────
+    lme4_df = pd.read_csv(results_csv)
+
+    # Build per-genotype, per-metric rows using the LME intercept as N2 baseline
+    n_particles = particle_df.groupby("genotype")["recording_id"].agg(
+        n_recs="nunique", n_part="count").reset_index()
+    n_particles.columns = ["genotype", "n_recordings", "n_particles"]
+
+    all_rows = []
+    for metric in metrics:
+        m_rows        = lme4_df[lme4_df["metric"] == metric]
+        intercept_row = m_rows[m_rows["term"] == "(Intercept)"]
+        if intercept_row.empty:
+            continue
+        n2_baseline = float(intercept_row["estimate"].iloc[0])
+        geno_rows   = m_rows[m_rows["genotype"] != "(Intercept)"].copy()
+
+        tests = []
+        for geno in order:
+            if geno == N2_FOLDER:
+                continue
+            row    = geno_rows[geno_rows["genotype"] == geno]
+            counts = n_particles[n_particles["genotype"] == geno]
+            n_rec  = int(counts["n_recordings"].iloc[0]) if not counts.empty else 0
+            n_part = int(counts["n_particles"].iloc[0])  if not counts.empty else 0
+            if row.empty or pd.isna(row["estimate"].iloc[0]):
+                tests.append({"genotype": geno, "metric": metric,
+                              "n_recordings": n_rec, "n_particles": n_part,
+                              "fold_change": np.nan, "fc_lo": np.nan,
+                              "fc_hi": np.nan, "p_raw": np.nan})
+                continue
+            b  = float(row["estimate"].iloc[0])
+            se = float(row["se"].iloc[0])
+            p  = float(row["p_value"].iloc[0])
+            fc    = 1 + b  / n2_baseline
+            fc_lo = 1 + (b - 1.96 * se) / n2_baseline
+            fc_hi = 1 + (b + 1.96 * se) / n2_baseline
+            tests.append({"genotype": geno, "metric": metric,
+                          "n_recordings": n_rec, "n_particles": n_part,
+                          "fold_change": fc, "fc_lo": fc_lo, "fc_hi": fc_hi,
+                          "p_raw": p})
+
+        pvals    = np.array([t["p_raw"] for t in tests], dtype=float)
+        testable = ~np.isnan(pvals)
+        qvals    = np.full(len(pvals), np.nan)
+        if testable.sum() > 0:
+            qvals[testable] = _bh_correct(pvals[testable])
+        for t, q in zip(tests, qvals):
+            t["q"]     = q
+            t["stars"] = _stars(q)
+        all_rows.extend(tests)
+
+    return pd.DataFrame(all_rows)
+
+
+# ── figure colours ────────────────────────────────────────────────────────────
+
 DOT_MATCHED   = "#4393c3"   # steel blue  — same-date N2, filled
 DOT_UNMATCHED = "#d6604d"   # coral       — grand-mean N2, open
-DOT_N2        = "#999999"   # grey        — N2 recordings, filled
-
-# Genotype summary diamonds + SEM bars (visually distinct from dots)
-DIAMOND_MUT   = "#b2182b"   # dark red
-DIAMOND_N2    = "#111111"   # near-black
+DOT_N2        = "#999999"   # grey        — N2 recordings
+DIAMOND_MUT   = "#b2182b"   # dark red    — mutant LME estimate
+DIAMOND_N2    = "#111111"   # near-black  — N2 mean
 
 
-def make_plot(df, order, out_path):
-    ytick = {g: i for i, g in enumerate(order)}
+# ── main comparison figure ───────────────────────────────────────────────────
+
+def make_plot(df, order, stat_df, out_path):
+    ytick  = {g: i for i, g in enumerate(order)}
     n_geno = len(order)
     fig_h  = max(8, n_geno * 0.45)
 
@@ -255,46 +516,62 @@ def make_plot(df, order, out_path):
     fig.suptitle("Nawaphat locomotion off food — postural comparison (fold-change vs N2)",
                  fontsize=12, y=1.01)
 
-    # Precompute per-genotype event totals for annotation
-    event_cols = {"reversal_rate": ("n_reversals", "n_particles"),
+    event_cols = {"reversal_rate":  ("n_reversals",  "n_particles"),
                   "pirouette_rate": ("n_pirouettes", "n_particles")}
 
     for ax, metric in zip(axes, METRICS):
         norm_col    = f"{metric}_norm"
         matched_col = f"{metric}_date_matched"
 
-        # Individual recording dots
+        # Individual recording dots (mutants only)
         for _, row in df.iterrows():
+            if row["genotype"] == N2_FOLDER:
+                continue
             y = ytick[row["genotype"]]
             x = row[norm_col]
             if pd.isna(x):
                 continue
-            is_n2   = row["genotype"] == N2_FOLDER
             matched = row[matched_col]
-            if is_n2:
-                ec, fc = DOT_N2, DOT_N2
-            elif matched:
-                ec, fc = DOT_MATCHED, DOT_MATCHED
-            else:
-                ec, fc = DOT_UNMATCHED, "none"
+            ec, fc = (DOT_MATCHED, DOT_MATCHED) if matched else (DOT_UNMATCHED, "none")
             ax.plot(x, y, "o", mfc=fc, mec=ec, ms=5, alpha=0.65, lw=0, zorder=2)
 
-        # Genotype mean ± SEM (date-matched only) — diamonds in a contrasting colour
+        # Point estimates + uncertainty bars
         for geno in order:
-            y    = ytick[geno]
-            rows = df[(df["genotype"] == geno) & df[matched_col]]
-            vals = rows[norm_col].dropna()
-            if len(vals) == 0:
-                continue
-            mean = vals.mean()
-            sem  = vals.sem() if len(vals) > 1 else 0.0
-            dc   = DIAMOND_N2 if geno == N2_FOLDER else DIAMOND_MUT
-            ax.plot([mean - sem, mean + sem], [y, y],
-                    color=dc, lw=2.5, solid_capstyle="round", zorder=4)
-            ax.plot(mean, y, "D", color=dc, ms=7, zorder=5,
-                    mec="white", mew=0.5)
+            y  = ytick[geno]
+            dc = DIAMOND_N2 if geno == N2_FOLDER else DIAMOND_MUT
 
-        # Annotate reversal and pirouette panels with n_events / n_worms per genotype
+            if geno == N2_FOLDER:
+                vals = df[(df["genotype"] == N2_FOLDER) & df[matched_col]][norm_col].dropna()
+                if len(vals) == 0:
+                    continue
+                center = vals.mean()
+                sem    = vals.sem() if len(vals) > 1 else 0.0
+                lo, hi = center - sem, center + sem
+                raw_n2 = df[df["genotype"] == N2_FOLDER][metric].mean()
+                ax.text(center, y + 0.19, f"{raw_n2:.3f}", fontsize=4.5, va="bottom",
+                        ha="center", color=dc, alpha=0.85, zorder=7)
+                ax.plot([lo, hi], [y, y], color=dc, lw=2.5, solid_capstyle="round", zorder=4)
+                ax.plot(center, y, "D", color=dc, ms=7, zorder=5, mec="white", mew=0.5)
+                continue
+
+            row = stat_df[(stat_df["genotype"] == geno) & (stat_df["metric"] == metric)]
+            if row.empty or pd.isna(row["fold_change"].iloc[0]):
+                continue
+            r      = row.iloc[0]
+            center = r["fold_change"]
+            lo     = r["fc_lo"]
+            hi     = r["fc_hi"]
+            stars  = _stars(r["q"])
+            if stars:
+                ax.text(hi + 0.06, y, stars, fontsize=11, va="center",
+                        ha="left", color="#111111", fontweight="bold", zorder=6)
+
+            ax.plot([lo, hi], [y, y], color=dc, lw=2.5, solid_capstyle="round", zorder=4)
+            ax.plot(center, y, "D", color=dc, ms=7, zorder=5, mec="white", mew=0.5)
+            ax.text(center, y + 0.19, f"{center:.2f}", fontsize=4.5, va="bottom",
+                    ha="center", color=dc, alpha=0.85, zorder=7)
+
+        # n(events)/n(worms) annotation on reversal and pirouette panels
         if metric in event_cols:
             ev_col, n_col = event_cols[metric]
             for geno in order:
@@ -309,6 +586,8 @@ def make_plot(df, order, out_path):
         ax.axvline(1.0, color="gray", lw=0.8, ls="--", alpha=0.5, zorder=0)
         ax.set_xlabel(METRIC_LABELS[metric], fontsize=9)
         ax.set_ylim(-0.8, n_geno - 0.2)
+        if metric == "speed":
+            ax.set_xlim(0, 2)
         ax.spines[["top", "right"]].set_visible(False)
         ax.tick_params(axis="x", labelsize=8)
 
@@ -320,10 +599,8 @@ def make_plot(df, order, out_path):
                       label="Recording — same-date N2"),
         mlines.Line2D([], [], color=DOT_UNMATCHED, marker="o", mfc="none", ls="none",
                       label="Recording — grand-mean N2 (no same-date N2)"),
-        mlines.Line2D([], [], color=DOT_N2, marker="o", ls="none",
-                      label="N2 recording (vs own grand mean)"),
         mlines.Line2D([], [], color=DIAMOND_MUT, marker="D", ls="none",
-                      mec="white", mew=0.5, label="Genotype mean ± SEM"),
+                      mec="white", mew=0.5, label="LME estimate ± 95% CI"),
         mlines.Line2D([], [], color=DIAMOND_N2, marker="D", ls="none",
                       mec="white", mew=0.5, label="N2 mean ± SEM"),
     ]
@@ -333,6 +610,106 @@ def make_plot(df, order, out_path):
     plt.tight_layout()
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     print(f"Saved figure: {out_path}")
+    plt.close(fig)
+
+
+# ── speed distribution figure ────────────────────────────────────────────────
+
+_SUBROW_H = 0.65   # height (in y-units) per recording row
+_GENO_GAP = 0.35   # gap between genotype blocks
+
+
+def make_speed_dist_plot(particle_df, order, n2_by_date_speed, n2_grand_speed, out_path):
+    """
+    Per-recording speed distributions, one violin per recording, grouped by genotype.
+
+    Normalization:
+        - Mutant recordings: particle speed / same-date N2 recording median
+        - N2: pooled distribution, particle speed / N2 grand median (all centers at ~1.0)
+    """
+    from scipy.stats import gaussian_kde
+
+    # Build y-axis layout: mutants get 1 sub-row per recording; N2 gets 1 pooled row
+    layout         = {}  # geno -> {"rows": [(y, date_or_None), ...], "y_center": float}
+    tick_positions = []
+    tick_labels    = []
+    current_y      = 0.0
+
+    for geno in order:
+        if geno == N2_FOLDER:
+            row_specs = [(current_y + _SUBROW_H / 2, None)]
+            n_rows    = 1
+        else:
+            dates     = sorted(particle_df[particle_df["genotype"] == geno]["date"].unique())
+            row_specs = [(current_y + i * _SUBROW_H + _SUBROW_H / 2, d)
+                         for i, d in enumerate(dates)]
+            n_rows    = len(dates)
+
+        y_lo      = current_y
+        y_hi      = current_y + n_rows * _SUBROW_H
+        y_center  = (y_lo + y_hi) / 2
+        layout[geno] = {"rows": row_specs, "y_lo": y_lo, "y_hi": y_hi}
+        tick_positions.append(y_center)
+        tick_labels.append(geno)
+        current_y = y_hi + _GENO_GAP
+
+    total_h = current_y
+    fig_h   = max(10, total_h * 0.30)
+    fig, ax = plt.subplots(figsize=(10, fig_h))
+    fig.suptitle(
+        "Per-recording forward-run speed distribution\n"
+        "(mutants: normalized to same-date N2 median; N2: pooled)",
+        fontsize=11)
+
+    x_range   = np.linspace(0, 2.5, 500)
+    violin_hw = _SUBROW_H * 0.42
+
+    for geno in order:
+        color = DOT_N2 if geno == N2_FOLDER else DOT_MATCHED
+
+        for y_row, date in layout[geno]["rows"]:
+            if date is None:  # N2 pooled
+                vals = particle_df[particle_df["genotype"] == N2_FOLDER]["fwd_speed"].dropna()
+                ref  = n2_grand_speed
+            else:
+                vals = particle_df[(particle_df["genotype"] == geno) &
+                                   (particle_df["date"] == date)]["fwd_speed"].dropna()
+                ref  = n2_by_date_speed.get(date, n2_grand_speed)
+
+            if len(vals) < 3 or ref <= 0:
+                continue
+            vals_norm = vals / ref
+
+            try:
+                kde     = gaussian_kde(vals_norm, bw_method=0.30)
+                density = kde(x_range)
+                density = density / density.max() * violin_hw
+            except Exception:
+                continue
+
+            ax.fill_between(x_range, y_row - density, y_row + density,
+                            alpha=0.45, color=color, lw=0)
+            ax.plot(x_range, y_row + density, color=color, lw=0.4, alpha=0.6)
+            ax.plot(x_range, y_row - density, color=color, lw=0.4, alpha=0.6)
+            med = float(np.median(vals_norm))
+            ax.plot([med, med], [y_row - violin_hw * 0.85, y_row + violin_hw * 0.85],
+                    color=color, lw=1.2, solid_capstyle="round", zorder=3)
+
+        # Light separator below each genotype block
+        ax.axhline(layout[geno]["y_lo"], color="lightgray", lw=0.3, zorder=0)
+
+    ax.axvline(1.0, color="gray", lw=0.8, ls="--", alpha=0.5, zorder=0)
+    ax.set_xlim(0, 2.5)
+    ax.set_ylim(-0.2, total_h)
+    ax.set_yticks(tick_positions)
+    ax.set_yticklabels(tick_labels, fontsize=8)
+    ax.set_xlabel("Forward-run speed (fold-change vs same-date N2 median)", fontsize=9)
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.tick_params(axis="x", labelsize=8)
+
+    plt.tight_layout()
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    print(f"Saved speed distribution figure: {out_path}")
     plt.close(fig)
 
 
@@ -348,8 +725,15 @@ def main():
                         help="CSV file with genotype,date rows to censor")
     parser.add_argument("--min-speed",  type=float, default=0.03,
                         help="Exclude particles with mean speed below this (mm/s). "
-                             "Removes injured/stationary worms. Default: 0.03")
+                             "Default: 0.03")
+    parser.add_argument("--refresh",    action="store_true",
+                        help="Force re-scan from NAS even if local parquet cache exists")
+    parser.add_argument("--refit",      action="store_true",
+                        help="Re-run R/lme4 models even if stats CSV cache exists. "
+                             "--refresh implies --refit.")
     args = parser.parse_args()
+    if args.refresh:
+        args.refit = True
 
     os.makedirs(args.out_dir, exist_ok=True)
 
@@ -359,26 +743,64 @@ def main():
         for g, d in sorted(exclusions):
             print(f"  {g} / {d}")
 
-    print(f"Scanning dataset… (min_speed filter: {args.min_speed:.3f} mm/s)")
-    df = scan_dataset(args.data_dir, args.frame_rate, min_speed=args.min_speed)
+    # ── parquet cache ─────────────────────────────────────────────────────────
+    particle_cache = os.path.join(args.out_dir, "particle_data.parquet")
+    frame_cache    = os.path.join(args.out_dir, "fwd_frame_data.parquet")
+    has_cache = (os.path.exists(particle_cache) and os.path.exists(frame_cache)
+                 and not args.refresh)
 
-    if exclusions:
-        before = len(df)
-        df = df[~df.apply(lambda r: (r["genotype"], r["date"]) in exclusions, axis=1)]
-        print(f"Dropped {before - len(df)} excluded recording(s)")
-    print(f"Loaded {len(df)} recordings, {df['genotype'].nunique()} genotypes, "
-          f"{df['n_particles'].sum():.0f} total particles")
+    if has_cache:
+        print("Loading cached data from local parquet files…")
+        particle_df = pd.read_parquet(particle_cache)
+        frame_df    = pd.read_parquet(frame_cache)
+        print(f"  {len(particle_df)} particles, {len(frame_df):,} fwd frames")
+    else:
+        if args.refresh:
+            print("--refresh: re-scanning NAS…")
+        else:
+            print("No local cache found — scanning NAS…")
+        print(f"  (min_speed filter: {args.min_speed:.3f} mm/s)")
+        particle_df = scan_dataset_particles(
+            args.data_dir, args.frame_rate,
+            exclusions=exclusions, min_speed=args.min_speed)
+        frame_df = scan_dataset_fwd_frames(
+            args.data_dir, args.frame_rate,
+            exclusions=exclusions, min_speed=args.min_speed)
+        particle_df.to_parquet(particle_cache, index=False)
+        frame_df.to_parquet(frame_cache, index=False)
+        print(f"  Cached to {particle_cache}")
+        print(f"  Cached to {frame_cache}")
 
-    df = add_normalization(df)
+    # ── per-recording summary ─────────────────────────────────────────────────
+    recording_cache = os.path.join(args.out_dir, "recording_data.parquet")
+    if os.path.exists(recording_cache) and not args.refresh:
+        print("Loading cached recording summary…")
+        df = pd.read_parquet(recording_cache)
+        print(f"  {len(df)} recordings, {df['genotype'].nunique()} genotypes")
+    else:
+        print(f"\nScanning dataset… (min_speed filter: {args.min_speed:.3f} mm/s)")
+        df = scan_dataset(args.data_dir, args.frame_rate, min_speed=args.min_speed)
+        if exclusions:
+            before = len(df)
+            df = df[~df.apply(lambda r: (r["genotype"], r["date"]) in exclusions, axis=1)]
+            print(f"Dropped {before - len(df)} excluded recording(s)")
+        print(f"Loaded {len(df)} recordings, {df['genotype'].nunique()} genotypes, "
+              f"{df['n_particles'].sum():.0f} total particles")
+        df = add_normalization(df)
+        df.to_parquet(recording_cache, index=False)
+        print(f"  Cached to {recording_cache}")
 
-    # Print N2 date-to-date variability as a sanity check
-    n2 = df[df["genotype"] == N2_FOLDER]
+    n2_recs  = df[df["genotype"] == N2_FOLDER]
+    n2_grand = {m: n2_recs[m].mean() for m in METRICS}
+    n2_by_date = {m: n2_recs.groupby("date")[m].mean().to_dict() for m in METRICS}
+
     print("\nN2 grand means (raw):")
     for m in METRICS:
-        print(f"  {m}: {n2[m].mean():.3f}  (CV = {n2[m].std()/n2[m].mean()*100:.0f}%)")
+        cv = n2_recs[m].std() / n2_grand[m] * 100
+        print(f"  {m}: {n2_grand[m]:.3f}  (CV = {cv:.0f}%)")
 
-    # Save CSV
-    csv_out = os.path.join(args.out_dir, "postural_comparison.csv")
+    # Save per-recording CSV
+    csv_out   = os.path.join(args.out_dir, "postural_comparison.csv")
     col_order = (["genotype", "date", "n_particles",
                   "n_reversals", "n_pirouettes", "n_excluded"]
                  + METRICS
@@ -389,41 +811,49 @@ def main():
     print(f"\nSaved summary CSV: {csv_out}")
 
     order = genotype_order(df)
-    fig_out = os.path.join(args.out_dir, "postural_comparison.png")
-    make_plot(df, order, fig_out)
 
-    # Print quick text summary sorted by normalized reversal rate
-    print("\nGenotype summary (date-matched recordings only, sorted by reversal rate):")
+    # ── LME stats ─────────────────────────────────────────────────────────────
+    stats_out = os.path.join(args.out_dir, "postural_comparison_stats.csv")
+    if os.path.exists(stats_out) and not args.refit:
+        print("\nLoading cached LME stats (use --refit to rerun models)…")
+        stat_df = pd.read_csv(stats_out)
+    else:
+        print("\nFitting LME models via R/lme4…")
+        stat_df = fit_lme_stats(frame_df, particle_df, order, METRICS, args.out_dir)
+        stat_df.to_csv(stats_out, index=False, float_format="%.4f")
+        print(f"Saved stats CSV: {stats_out}")
+
+    fig_out = os.path.join(args.out_dir, "postural_comparison.png")
+    make_plot(df, order, stat_df, fig_out)
+
+    dist_out = os.path.join(args.out_dir, "postural_comparison_speed_dist.png")
+    make_speed_dist_plot(particle_df, order,
+                         n2_by_date_speed=n2_by_date["speed"],
+                         n2_grand_speed=n2_grand["speed"],
+                         out_path=dist_out)
+
+    # Print summary
+    print("\nGenotype summary (sorted by speed):")
     summary = []
     for geno in order:
-        rows = df[(df["genotype"] == geno) & df["reversal_rate_date_matched"]]
-        n = len(rows)
-        if n == 0:
-            rows_all = df[df["genotype"] == geno]
-            summary.append({
-                "genotype": geno, "n": len(rows_all), "note": "no same-date N2",
-                "speed": rows_all["speed"].mean(),
-                "rev_rate": rows_all["reversal_rate"].mean(),
-                "pir_rate": rows_all["pirouette_rate"].mean(),
-                "speed_fc": rows_all["speed_norm"].mean(),
-                "rev_fc": rows_all["reversal_rate_norm"].mean(),
-                "pir_fc": rows_all["pirouette_rate_norm"].mean(),
-            })
-        else:
-            summary.append({
-                "genotype": geno, "n": n, "note": "",
-                "speed": rows["speed"].mean(),
-                "rev_rate": rows["reversal_rate"].mean(),
-                "pir_rate": rows["pirouette_rate"].mean(),
-                "speed_fc": rows["speed_norm"].mean(),
-                "rev_fc": rows["reversal_rate_norm"].mean(),
-                "pir_fc": rows["pirouette_rate_norm"].mean(),
-            })
+        rows_m = df[(df["genotype"] == geno) & df["speed_date_matched"]]
+        rows_a = df[df["genotype"] == geno]
+        rows   = rows_m if len(rows_m) > 0 else rows_a
+        note   = "" if len(rows_m) > 0 else "no same-date N2"
+        stat_r = stat_df[(stat_df["genotype"] == geno) & (stat_df["metric"] == "speed")]
+        lme_fc = stat_r["fold_change"].iloc[0] if not stat_r.empty else np.nan
+        lme_q  = stat_r["q"].iloc[0] if not stat_r.empty else np.nan
+        summary.append({
+            "genotype": geno, "n": len(rows), "note": note,
+            "speed": rows["speed"].mean(),
+            "rev_rate": rows["reversal_rate"].mean(),
+            "speed_fc (LME)": lme_fc,
+            "speed_q": lme_q,
+        })
     sdf = pd.DataFrame(summary)
     print(sdf.to_string(
         index=False,
-        columns=["genotype", "n", "note", "speed", "rev_rate", "pir_rate",
-                 "speed_fc", "rev_fc", "pir_fc"],
+        columns=["genotype", "n", "note", "speed", "rev_rate", "speed_fc (LME)", "speed_q"],
         float_format=lambda x: f"{x:.3f}",
         max_colwidth=22,
     ))
