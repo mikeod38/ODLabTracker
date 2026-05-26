@@ -138,6 +138,26 @@ thresh: None          # manual threshold; None = auto (Otsu)
 thresh_method: otsu   # auto-threshold method: otsu, triangle, yen, li
 min_thresh: null      # floor for auto-threshold; null = auto-detect from background noise (backsub only); set explicitly to override
 max_objects: null     # max detections per frame; threshold raised if exceeded
+normalize_illumination: false  # two-pass illumination normalization: per-frame median correction + smoothed slow-drift correction; recommended for IR setups with LED flicker
+```
+
+### Postural-specific parameters
+
+```yaml
+mode: postural
+speed_threshold: 0.03        # minimum speed to classify as moving (mm/s)
+boundary_margin: null        # censor particles whose median centroid is within this many px of any frame edge;
+                             # null = auto (half the median major axis, ~half a worm length)
+max_area_cv: null            # exclude tracks with within-track area CV above this value; null = disabled
+                             # (try 0.4 to filter fragmented or merging tracks)
+save_annotated_video: false  # write a per-worm annotated video alongside tracks.csv; slow (~60 s/video),
+                             # disable for batch runs
+reversal_persistence: 2      # consecutive qualifying frames required to confirm reversal onset;
+                             # filters single-frame direction spikes during pauses
+merge_reversal_gap: 5        # merge adjacent reversal events separated by ≤ this many frames;
+                             # repairs splits caused by brief unreliable frames mid-reversal
+area_reliability_threshold: 0.70  # suppress reversal entry when particle area drops below this fraction
+                                  # of its per-particle median (guards against partial thresholding artifacts)
 ```
 
 ### Pumping-specific parameters
@@ -146,8 +166,6 @@ max_objects: null     # max detections per frame; threshold raised if exceeded
 mode: pumping
 min_pump_track_frames: 20   # minimum track length for pumping analysis
 peak_prominence: 10         # scipy find_peaks prominence threshold
-stitch_gap_frames: 30       # max gap (frames) for stitching broken track fragments
-stitch_gap_pixels: 40       # max distance (px) for stitching broken track fragments
 ```
 
 ---
@@ -284,14 +302,20 @@ Setting `-j` too high will cause the system to swap memory to disk, which is slo
 
 ```
 ODLabTracker/
-├── track.py                  # Main entry point (dispatches by mode)
-├── FastTrack.py              # Postural analysis
-├── FastTrackPumping.py       # Pumping analysis
-├── configs/                  # Example YAML config files
-├── dev/                      # Diagnostic scripts
-│   ├── inspect_first_frame.py
-│   └── inspect_pumping_signal.py
+├── track.py                         # Main entry point (dispatches by mode)
+├── FastTrack.py                     # Postural tracking and movement classification
+├── FastTrackPumping.py              # Pumping analysis
+├── configs/                         # Example YAML config files
+├── dev/                             # Diagnostic and analysis scripts
+│   ├── inspect_first_frame.py       # Visualize threshold and detections on frame 1
+│   ├── inspect_pumping_signal.py    # Plot pumping intensity trace with detected peaks
+│   ├── batch_postural_comparison.py # Multi-genotype locomotion speed comparison
+│   └── LOCOMOTION_ANALYSIS_METHODS.md  # Statistical methods for locomotion analysis
+├── docs/
+│   ├── pumping_tutorial.md          # Pumping mode walkthrough
+│   └── postural_comparison.md       # Postural comparison pipeline guide
 ├── src/ODLabTracker/
-│   └── tracking.py           # Core tracking and analysis library
+│   ├── tracking.py                  # Core tracking and analysis library
+│   └── locomotion.py                # Batch locomotion metric extraction and LME fitting
 └── pyproject.toml
 ```
