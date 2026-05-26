@@ -581,7 +581,7 @@ def make_plot(df, order, stat_df, particle_df, n2_by_date_speed, n2_grand_speed,
             sem    = vals.sem() if len(vals) > 1 else 0.0
             lo, hi = center - sem, center + sem
             raw_n2 = df[df["genotype"] == N2_FOLDER][metric].mean()
-            ax.text(center, y + 0.19, f"{raw_n2 * 1000:.0f} µm/s", fontsize=4.5, va="bottom",
+            ax.text(center, y + 0.19, f"{raw_n2 * 1000:.0f} µm/s", fontsize=6.5, va="bottom",
                     ha="center", color=dc, alpha=0.85, zorder=7)
             ax.plot([lo, hi], [y, y], color=dc, lw=2.5, solid_capstyle="round", zorder=4)
             ax.plot(center, y, "D", color=dc, ms=7, zorder=5, mec="white", mew=0.5)
@@ -601,7 +601,7 @@ def make_plot(df, order, stat_df, particle_df, n2_by_date_speed, n2_grand_speed,
 
         ax.plot([lo, hi], [y, y], color=dc, lw=2.5, solid_capstyle="round", zorder=4)
         ax.plot(center, y, "D", color=dc, ms=7, zorder=5, mec="white", mew=0.5)
-        ax.text(center, y + 0.19, f"{center:.2f}", fontsize=4.5, va="bottom",
+        ax.text(center, y + 0.19, f"{center:.2f}", fontsize=6.5, va="bottom",
                 ha="center", color=dc, alpha=0.85, zorder=7)
 
     ax.axvline(1.0, color="gray", lw=0.8, ls="--", alpha=0.5, zorder=0)
