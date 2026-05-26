@@ -335,18 +335,21 @@ def fit_lme_stats(frame_df, particle_df, order, metrics, out_dir):
     Fit LME models via R/lme4 + lmerTest and return a tidy stats DataFrame.
 
     Speed (per-forward-run-frame):
-        speed ~ genotype + (1|date) + (1|recording_id) + (1|particle_uid)
+        speed ~ genotype + date + (1|recording_id) + (1|particle_uid)
 
     Reversal rate / pirouette rate (per-particle):
-        rate ~ genotype + (1|date) + (1|recording_id)
+        rate ~ genotype + date + (1|recording_id)
 
-    Using recording_id as the outermost explicit grouping sets N_eff to the
-    number of plates (~3 per genotype).  The (1|date) random intercept
-    absorbs day-to-day variability shared by N2 and mutant recordings on the
-    same date; this controls for batch effects without being collinear with
-    the genotype fixed effect (unlike a recording-vc nested inside date).
-    The (1|particle_uid) in the speed model accounts for within-particle frame
-    correlation and weights each particle by its number of forward-run frames.
+    date is a FIXED effect, not random.  A random date effect undergoes REML
+    shrinkage and fails to fully absorb day-to-day N2 variability when σ²_date
+    is small relative to residual variance, causing genotypes measured on
+    atypically fast/slow dates to receive biased LME estimates.  Fixed date
+    effects do not shrink — they are equivalent to within-date normalization
+    (what the per-recording blue dots already show).
+
+    Only recordings on dates where N2 was also measured are included in the
+    model (keep_n2_dates filter).  Genotypes with no same-date N2 (gba-4,
+    glo-1, cest-1.2, ugt-64) are excluded; their stats are reported as NaN.
 
     lmerTest Satterthwaite df approximation gives correct small-sample p-values
     whose df reflect the number of recordings, not the number of particles.
@@ -385,32 +388,44 @@ extract_coefs <- function(fit, metric) {{
   s
 }}
 
+# ── helper: filter to dates where N2 was recorded ───────────────────────────
+keep_n2_dates <- function(df) {{
+  n2_dates <- unique(df$date[df$genotype == n2_ref])
+  df[df$date %in% n2_dates, ]
+}}
+
 # ── speed: per-forward-run-frame ────────────────────────────────────────────
 cat("Fitting speed model...\\n")
-fdf             <- read.csv("{frame_csv}", stringsAsFactors = FALSE)
-fdf$genotype    <- relevel(as.factor(fdf$genotype), ref = n2_ref)
-speed_fit       <- lmer(speed ~ genotype + (1|date) + (1|recording_id) + (1|particle_uid),
-                        data = fdf, REML = TRUE,
-                        control = lmerControl(optimizer = "bobyqa"))
+fdf        <- read.csv("{frame_csv}", stringsAsFactors = FALSE)
+fdf_match  <- keep_n2_dates(fdf)
+fdf_match$genotype <- relevel(droplevels(as.factor(fdf_match$genotype)), ref = n2_ref)
+fdf_match$date     <- factor(fdf_match$date)
+cat(sprintf("  Speed: %d frames, %d genotypes, %d dates\\n",
+            nrow(fdf_match), nlevels(fdf_match$genotype), nlevels(fdf_match$date)))
+speed_fit  <- lmer(speed ~ genotype + date + (1|recording_id) + (1|particle_uid),
+                   data = fdf_match, REML = TRUE,
+                   control = lmerControl(optimizer = "bobyqa"))
 cat("Speed model done.\\n")
 
 # ── reversal rate: per-particle ─────────────────────────────────────────────
 cat("Fitting reversal rate model...\\n")
-pdf             <- read.csv("{particle_csv}", stringsAsFactors = FALSE)
-pdf_rev         <- pdf[!is.na(pdf$reversal_rate), ]
-pdf_rev$genotype <- relevel(as.factor(pdf_rev$genotype), ref = n2_ref)
-rev_fit         <- lmer(reversal_rate ~ genotype + (1|date) + (1|recording_id),
-                        data = pdf_rev, REML = TRUE,
-                        control = lmerControl(optimizer = "bobyqa"))
+pdf        <- read.csv("{particle_csv}", stringsAsFactors = FALSE)
+pdf_rev    <- keep_n2_dates(pdf[!is.na(pdf$reversal_rate), ])
+pdf_rev$genotype <- relevel(droplevels(as.factor(pdf_rev$genotype)), ref = n2_ref)
+pdf_rev$date     <- factor(pdf_rev$date)
+rev_fit    <- lmer(reversal_rate ~ genotype + date + (1|recording_id),
+                   data = pdf_rev, REML = TRUE,
+                   control = lmerControl(optimizer = "bobyqa"))
 cat("Reversal rate model done.\\n")
 
 # ── pirouette rate: per-particle ─────────────────────────────────────────────
 cat("Fitting pirouette rate model...\\n")
-pdf_pir          <- pdf[!is.na(pdf$pirouette_rate), ]
-pdf_pir$genotype <- relevel(as.factor(pdf_pir$genotype), ref = n2_ref)
-pir_fit          <- lmer(pirouette_rate ~ genotype + (1|date) + (1|recording_id),
-                         data = pdf_pir, REML = TRUE,
-                         control = lmerControl(optimizer = "bobyqa"))
+pdf_pir    <- keep_n2_dates(pdf[!is.na(pdf$pirouette_rate), ])
+pdf_pir$genotype <- relevel(droplevels(as.factor(pdf_pir$genotype)), ref = n2_ref)
+pdf_pir$date     <- factor(pdf_pir$date)
+pir_fit    <- lmer(pirouette_rate ~ genotype + date + (1|recording_id),
+                   data = pdf_pir, REML = TRUE,
+                   control = lmerControl(optimizer = "bobyqa"))
 cat("Pirouette rate model done.\\n")
 
 # ── collect results ──────────────────────────────────────────────────────────
