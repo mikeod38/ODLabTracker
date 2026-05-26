@@ -630,9 +630,25 @@ def make_plot(df, order, stat_df, particle_df, n2_by_date_speed, n2_grand_speed,
               loc="center left", bbox_to_anchor=(legend_x, 0.5))
 
     # ── right panel: per-recording speed distributions ────────────────────────
-    VIOLIN_HW = 0.13   # half-height per recording violin
-    N2_VHW    = 0.27   # N2 pooled violin (wider — many particles)
-    x_range   = np.linspace(0, 2.5, 500)
+    VIOLIN_HW   = 0.09   # half-height per recording violin
+    N2_VHW      = 0.18   # N2 pooled violin (wider — many particles)
+    DENS_THRESH = 0.03   # fraction of peak below which outline is suppressed
+    x_range     = np.linspace(0, 2.5, 500)
+
+    def _draw_violin(ax_d, x_r, raw_density, vhw, y_row, color, vals_n):
+        density = raw_density / raw_density.max() * vhw
+        mask    = raw_density >= raw_density.max() * DENS_THRESH
+        idx     = np.where(mask)[0]
+        if len(idx) == 0:
+            return
+        xs = x_r[idx[0]:idx[-1] + 1]
+        ds = density[idx[0]:idx[-1] + 1]
+        ax_d.fill_between(xs, y_row - ds, y_row + ds, alpha=0.45, color=color, lw=0)
+        ax_d.plot(xs, y_row + ds, color=color, lw=0.4, alpha=0.6)
+        ax_d.plot(xs, y_row - ds, color=color, lw=0.4, alpha=0.6)
+        med = float(np.median(vals_n))
+        ax_d.plot([med, med], [y_row - vhw * 0.85, y_row + vhw * 0.85],
+                  color=color, lw=1.2, solid_capstyle="round", zorder=3)
 
     for geno in order:
         y_ctr = ytick[geno]
@@ -643,22 +659,14 @@ def make_plot(df, order, stat_df, particle_df, n2_by_date_speed, n2_grand_speed,
             ref  = n2_grand_speed
             if len(vals) >= 3 and ref > 0:
                 vals_norm = vals / ref
-                kde     = gaussian_kde(vals_norm, bw_method=0.30)
-                density = kde(x_range)
-                density = density / density.max() * N2_VHW
-                ax_dist.fill_between(x_range, y_ctr - density, y_ctr + density,
-                                     alpha=0.45, color=DOT_N2, lw=0)
-                ax_dist.plot(x_range, y_ctr + density, color=DOT_N2, lw=0.4, alpha=0.6)
-                ax_dist.plot(x_range, y_ctr - density, color=DOT_N2, lw=0.4, alpha=0.6)
-                med = float(np.median(vals_norm))
-                ax_dist.plot([med, med], [y_ctr - N2_VHW * 0.85, y_ctr + N2_VHW * 0.85],
-                             color=DOT_N2, lw=1.2, solid_capstyle="round", zorder=3)
+                kde       = gaussian_kde(vals_norm, bw_method=0.30)
+                _draw_violin(ax_dist, x_range, kde(x_range), N2_VHW, y_ctr, DOT_N2, vals_norm)
         else:
             dates   = sorted(particle_df[particle_df["genotype"] == geno]["date"].unique())
             n       = len(dates)
             if n == 0:
                 continue
-            spacing = min(0.28, 0.70 / max(1, n - 1))
+            spacing = min(0.16, 0.40 / max(1, n - 1))
             offsets = [i * spacing - spacing * (n - 1) / 2 for i in range(n)]
 
             for date, offset in zip(dates, offsets):
@@ -670,19 +678,11 @@ def make_plot(df, order, stat_df, particle_df, n2_by_date_speed, n2_grand_speed,
                     continue
                 vals_norm = vals / ref
                 try:
-                    kde     = gaussian_kde(vals_norm, bw_method=0.30)
-                    density = kde(x_range)
-                    density = density / density.max() * VIOLIN_HW
+                    kde = gaussian_kde(vals_norm, bw_method=0.30)
                 except Exception:
                     continue
-                y_row = y_ctr + offset
-                ax_dist.fill_between(x_range, y_row - density, y_row + density,
-                                     alpha=0.45, color=color, lw=0)
-                ax_dist.plot(x_range, y_row + density, color=color, lw=0.4, alpha=0.6)
-                ax_dist.plot(x_range, y_row - density, color=color, lw=0.4, alpha=0.6)
-                med = float(np.median(vals_norm))
-                ax_dist.plot([med, med], [y_row - VIOLIN_HW * 0.85, y_row + VIOLIN_HW * 0.85],
-                             color=color, lw=1.2, solid_capstyle="round", zorder=3)
+                _draw_violin(ax_dist, x_range, kde(x_range), VIOLIN_HW,
+                             y_ctr + offset, color, vals_norm)
 
     ax_dist.axvline(1.0, color="gray", lw=0.8, ls="--", alpha=0.5, zorder=0)
     ax_dist.set_xlim(0, 2.5)
