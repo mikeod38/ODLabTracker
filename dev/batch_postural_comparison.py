@@ -1,28 +1,27 @@
 """
-Batch postural comparison for Nawaphat's 0_COMPLETE!! locomotion dataset.
+Batch postural comparison for multi-worm locomotion datasets.
 
-Per-recording summaries are built from per-particle stats (forward-run speed,
-reversal rate, pirouette rate).  Statistics use a linear mixed model (LME) with
-per-particle observations and nested random effects (1|date) + (1|date:recording)
-— this uses all available data and accounts for date-to-date and plate-to-plate
-variability without pre-normalizing the data.
-
-Fold-change reference: per-recording N2 grand mean (matching the dot display).
+Computes per-recording forward-run speed, reversal rate, and pirouette rate from
+ODLabTracker tracks.csv output, then fits linear mixed-effects models (LME) via
+R/lme4+lmerTest to estimate genotype effects relative to N2 controls.
 
 Outputs:
-    <out-dir>/postural_comparison.csv        per-recording summary table
-    <out-dir>/postural_comparison_stats.csv  LME coefficients and q-values
-    <out-dir>/postural_comparison.png        horizontal strip plot (3 panels)
-    <out-dir>/postural_comparison_speed_dist.png  per-recording speed distributions
+    <out-dir>/postural_comparison.csv           per-recording summary table
+    <out-dir>/postural_comparison_stats.csv     LME coefficients and q-values
+    <out-dir>/postural_comparison.png           strip plot + speed distributions
+    <out-dir>/supplemental_particle_data.csv    per-particle raw data (for reanalysis)
+
+Requires: ODLabTracker, numpy, pandas, matplotlib, scipy, pyarrow, R with lme4+lmerTest.
 
 Exclusion file (--exclude):
     CSV with columns genotype,date (YYYYMMDD). Matching recordings are dropped
     before normalization and plotting. Lines starting with # are ignored.
 
 Usage:
-    python dev/batch_postural_comparison.py
-    python dev/batch_postural_comparison.py --exclude data/nawaphat_postural_results/exclude.csv
-    python dev/batch_postural_comparison.py --out-dir results/nawaphat
+    python dev/batch_postural_comparison.py --data-dir /path/to/dataset --out-dir results/
+    python dev/batch_postural_comparison.py --out-dir results/  # replot from cached parquet
+    python dev/batch_postural_comparison.py --out-dir results/ --refit   # re-run LME
+    python dev/batch_postural_comparison.py --out-dir results/ --refresh  # rescan + refit
 """
 
 import argparse
@@ -36,11 +35,7 @@ import matplotlib.pyplot as plt
 import matplotlib.lines as mlines
 from scipy import stats as sp_stats
 
-DATA_DIR = (
-    "/Volumes/User Homes/ODlab-user/UserFolders/Nawaphat"
-    "/6 CEST-2.1/Locomotion_Off food/0_COMPLETE!!"
-)
-OUT_DIR = "data/nawaphat_postural_results"
+OUT_DIR = "data/postural_results"
 FRAME_RATE = 10   # fps, from IR_medium.yaml
 N2_FOLDER = "N2"
 
@@ -538,7 +533,8 @@ DIAMOND_N2    = "#111111"   # near-black  — N2 mean
 
 # ── main comparison figure ───────────────────────────────────────────────────
 
-def make_plot(df, order, stat_df, particle_df, n2_by_date_speed, n2_grand_speed, out_path):
+def make_plot(df, order, stat_df, particle_df, n2_by_date_speed, n2_grand_speed, out_path,
+              title="Forward-run speed (fold-change vs N2)"):
     from scipy.stats import gaussian_kde
 
     ytick  = {g: i for i, g in enumerate(order)}
@@ -549,8 +545,7 @@ def make_plot(df, order, stat_df, particle_df, n2_by_date_speed, n2_grand_speed,
         1, 2, sharey=True, figsize=(13, fig_h),
         gridspec_kw={"width_ratios": [2, 1]})
     fig.subplots_adjust(wspace=0.04)
-    fig.suptitle("Nawaphat locomotion off food — forward-run speed (fold-change vs N2)",
-                 fontsize=11, y=1.01)
+    fig.suptitle(title, fontsize=11, y=1.01)
 
     metric      = "speed"
     norm_col    = f"{metric}_norm"
@@ -701,23 +696,28 @@ def make_plot(df, order, stat_df, particle_df, n2_by_date_speed, n2_grand_speed,
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Batch postural comparison for Nawaphat locomotion dataset")
-    parser.add_argument("--data-dir",   default=DATA_DIR)
+        description="Batch postural comparison for multi-worm locomotion datasets")
+    parser.add_argument("--data-dir",   default=None,
+                        help="Path to dataset root directory (required with --refresh)")
     parser.add_argument("--out-dir",    default=OUT_DIR)
     parser.add_argument("--frame-rate", type=float, default=FRAME_RATE)
+    parser.add_argument("--title",      default="Forward-run speed (fold-change vs N2)",
+                        help="Figure title")
     parser.add_argument("--exclude",    default=None,
                         help="CSV file with genotype,date rows to censor")
     parser.add_argument("--min-speed",  type=float, default=0.03,
                         help="Exclude particles with mean speed below this (mm/s). "
                              "Default: 0.03")
     parser.add_argument("--refresh",    action="store_true",
-                        help="Force re-scan from NAS even if local parquet cache exists")
+                        help="Force re-scan from data-dir even if local parquet cache exists")
     parser.add_argument("--refit",      action="store_true",
                         help="Re-run R/lme4 models even if stats CSV cache exists. "
                              "--refresh implies --refit.")
     args = parser.parse_args()
     if args.refresh:
         args.refit = True
+    if args.refresh and not args.data_dir:
+        parser.error("--refresh requires --data-dir")
 
     os.makedirs(args.out_dir, exist_ok=True)
 
@@ -808,11 +808,24 @@ def main():
 
     order = genotype_order(df, stat_df)
 
+    # ── supplemental table ────────────────────────────────────────────────────
+    supp_out = os.path.join(args.out_dir, "supplemental_particle_data.csv")
+    supp_df = particle_df[["genotype", "date", "recording_id",
+                            "fwd_speed", "reversal_rate", "pirouette_rate"]].copy()
+    supp_df = supp_df.rename(columns={
+        "fwd_speed":       "forward_run_speed_mm_s",
+        "reversal_rate":   "reversal_rate_per_min",
+        "pirouette_rate":  "pirouette_rate_per_min",
+    })
+    supp_df.to_csv(supp_out, index=False, float_format="%.4f")
+    print(f"Saved supplemental table: {supp_out}")
+
     fig_out = os.path.join(args.out_dir, "postural_comparison.png")
     make_plot(df, order, stat_df, particle_df,
               n2_by_date_speed=n2_by_date["speed"],
               n2_grand_speed=n2_grand["speed"],
-              out_path=fig_out)
+              out_path=fig_out,
+              title=args.title)
 
     # Print summary
     print("\nGenotype summary (sorted by LME speed FC):")
