@@ -543,87 +543,70 @@ def make_plot(df, order, stat_df, out_path):
     n_geno = len(order)
     fig_h  = max(8, n_geno * 0.45)
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, fig_h), sharey=True)
-    fig.suptitle("Nawaphat locomotion off food — postural comparison (fold-change vs N2)",
-                 fontsize=12, y=1.01)
+    fig, ax = plt.subplots(figsize=(6, fig_h))
+    fig.suptitle("Nawaphat locomotion off food — forward-run speed (fold-change vs N2)",
+                 fontsize=11, y=1.01)
 
-    event_cols = {"reversal_rate":  ("n_reversals",  "n_particles"),
-                  "pirouette_rate": ("n_pirouettes", "n_particles")}
+    metric      = "speed"
+    norm_col    = f"{metric}_norm"
+    matched_col = f"{metric}_date_matched"
 
-    for ax, metric in zip(axes, METRICS):
-        norm_col    = f"{metric}_norm"
-        matched_col = f"{metric}_date_matched"
+    # Individual recording dots (mutants only)
+    for _, row in df.iterrows():
+        if row["genotype"] == N2_FOLDER:
+            continue
+        y = ytick[row["genotype"]]
+        x = row[norm_col]
+        if pd.isna(x):
+            continue
+        matched = row[matched_col]
+        ec, fc = (DOT_MATCHED, DOT_MATCHED) if matched else (DOT_UNMATCHED, "none")
+        ax.plot(x, y, "o", mfc=fc, mec=ec, ms=5, alpha=0.65, lw=0, zorder=2)
 
-        # Individual recording dots (mutants only)
-        for _, row in df.iterrows():
-            if row["genotype"] == N2_FOLDER:
+    # Point estimates + uncertainty bars
+    for geno in order:
+        y  = ytick[geno]
+        dc = DIAMOND_N2 if geno == N2_FOLDER else DIAMOND_MUT
+
+        if geno == N2_FOLDER:
+            vals = df[(df["genotype"] == N2_FOLDER) & df[matched_col]][norm_col].dropna()
+            if len(vals) == 0:
                 continue
-            y = ytick[row["genotype"]]
-            x = row[norm_col]
-            if pd.isna(x):
-                continue
-            matched = row[matched_col]
-            ec, fc = (DOT_MATCHED, DOT_MATCHED) if matched else (DOT_UNMATCHED, "none")
-            ax.plot(x, y, "o", mfc=fc, mec=ec, ms=5, alpha=0.65, lw=0, zorder=2)
-
-        # Point estimates + uncertainty bars
-        for geno in order:
-            y  = ytick[geno]
-            dc = DIAMOND_N2 if geno == N2_FOLDER else DIAMOND_MUT
-
-            if geno == N2_FOLDER:
-                vals = df[(df["genotype"] == N2_FOLDER) & df[matched_col]][norm_col].dropna()
-                if len(vals) == 0:
-                    continue
-                center = vals.mean()
-                sem    = vals.sem() if len(vals) > 1 else 0.0
-                lo, hi = center - sem, center + sem
-                raw_n2 = df[df["genotype"] == N2_FOLDER][metric].mean()
-                ax.text(center, y + 0.19, f"{raw_n2:.3f}", fontsize=4.5, va="bottom",
-                        ha="center", color=dc, alpha=0.85, zorder=7)
-                ax.plot([lo, hi], [y, y], color=dc, lw=2.5, solid_capstyle="round", zorder=4)
-                ax.plot(center, y, "D", color=dc, ms=7, zorder=5, mec="white", mew=0.5)
-                continue
-
-            row = stat_df[(stat_df["genotype"] == geno) & (stat_df["metric"] == metric)]
-            if row.empty or pd.isna(row["fold_change"].iloc[0]):
-                continue
-            r      = row.iloc[0]
-            center = r["fold_change"]
-            lo     = r["fc_lo"]
-            hi     = r["fc_hi"]
-            stars  = _stars(r["q"])
-            if stars:
-                ax.text(hi + 0.06, y, stars, fontsize=11, va="center",
-                        ha="left", color="#111111", fontweight="bold", zorder=6)
-
+            center = vals.mean()
+            sem    = vals.sem() if len(vals) > 1 else 0.0
+            lo, hi = center - sem, center + sem
+            raw_n2 = df[df["genotype"] == N2_FOLDER][metric].mean()
+            ax.text(center, y + 0.19, f"{raw_n2:.3f}", fontsize=4.5, va="bottom",
+                    ha="center", color=dc, alpha=0.85, zorder=7)
             ax.plot([lo, hi], [y, y], color=dc, lw=2.5, solid_capstyle="round", zorder=4)
             ax.plot(center, y, "D", color=dc, ms=7, zorder=5, mec="white", mew=0.5)
-            ax.text(center, y + 0.19, f"{center:.2f}", fontsize=4.5, va="bottom",
-                    ha="center", color=dc, alpha=0.85, zorder=7)
+            continue
 
-        # n(events)/n(worms) annotation on reversal and pirouette panels
-        if metric in event_cols:
-            ev_col, n_col = event_cols[metric]
-            for geno in order:
-                y      = ytick[geno]
-                g_rows = df[df["genotype"] == geno]
-                n_ev   = int(g_rows[ev_col].sum())
-                n_worm = int(g_rows[n_col].sum())
-                ax.text(1.01, y, f"{n_ev}/{n_worm}",
-                        transform=ax.get_yaxis_transform(),
-                        fontsize=5.5, va="center", ha="left", color="#555555")
+        row = stat_df[(stat_df["genotype"] == geno) & (stat_df["metric"] == metric)]
+        if row.empty or pd.isna(row["fold_change"].iloc[0]):
+            continue
+        r      = row.iloc[0]
+        center = r["fold_change"]
+        lo     = r["fc_lo"]
+        hi     = r["fc_hi"]
+        stars  = _stars(r["q"])
+        if stars:
+            ax.text(hi + 0.06, y, stars, fontsize=11, va="center",
+                    ha="left", color="#111111", fontweight="bold", zorder=6)
 
-        ax.axvline(1.0, color="gray", lw=0.8, ls="--", alpha=0.5, zorder=0)
-        ax.set_xlabel(METRIC_LABELS[metric], fontsize=9)
-        ax.set_ylim(-0.8, n_geno - 0.2)
-        if metric == "speed":
-            ax.set_xlim(0, 2)
-        ax.spines[["top", "right"]].set_visible(False)
-        ax.tick_params(axis="x", labelsize=8)
+        ax.plot([lo, hi], [y, y], color=dc, lw=2.5, solid_capstyle="round", zorder=4)
+        ax.plot(center, y, "D", color=dc, ms=7, zorder=5, mec="white", mew=0.5)
+        ax.text(center, y + 0.19, f"{center:.2f}", fontsize=4.5, va="bottom",
+                ha="center", color=dc, alpha=0.85, zorder=7)
 
-    axes[0].set_yticks(list(ytick.values()))
-    axes[0].set_yticklabels(list(ytick.keys()), fontsize=8)
+    ax.axvline(1.0, color="gray", lw=0.8, ls="--", alpha=0.5, zorder=0)
+    ax.set_xlabel(METRIC_LABELS[metric], fontsize=9)
+    ax.set_xlim(0, 2)
+    ax.set_ylim(-0.8, n_geno - 0.2)
+    ax.set_yticks(list(ytick.values()))
+    ax.set_yticklabels(list(ytick.keys()), fontsize=8)
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.tick_params(axis="x", labelsize=8)
 
     leg_handles = [
         mlines.Line2D([], [], color=DOT_MATCHED, marker="o", ls="none",
@@ -635,8 +618,7 @@ def make_plot(df, order, stat_df, out_path):
         mlines.Line2D([], [], color=DIAMOND_N2, marker="D", ls="none",
                       mec="white", mew=0.5, label="N2 mean ± SEM"),
     ]
-    axes[-1].legend(handles=leg_handles, fontsize=7.5, loc="lower right",
-                    framealpha=0.9)
+    ax.legend(handles=leg_handles, fontsize=7.5, loc="lower right", framealpha=0.9)
 
     plt.tight_layout()
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
