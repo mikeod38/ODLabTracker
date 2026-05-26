@@ -543,7 +543,7 @@ def make_plot(df, order, stat_df, out_path):
     n_geno = len(order)
     fig_h  = max(8, n_geno * 0.45)
 
-    fig, ax = plt.subplots(figsize=(6, fig_h))
+    fig, ax = plt.subplots(figsize=(8, fig_h))
     fig.suptitle("Nawaphat locomotion off food — forward-run speed (fold-change vs N2)",
                  fontsize=11, y=1.01)
 
@@ -611,15 +611,16 @@ def make_plot(df, order, stat_df, out_path):
 
     leg_handles = [
         mlines.Line2D([], [], color=DOT_MATCHED, marker="o", ls="none",
-                      label="Recording — same-date N2"),
+                      label="Recording —\nsame-date N2"),
         mlines.Line2D([], [], color=DOT_UNMATCHED, marker="o", mfc="none", ls="none",
-                      label="Recording — grand-mean N2 (no same-date N2)"),
+                      label="Recording —\ngrand-mean N2\n(no same-date N2)"),
         mlines.Line2D([], [], color=DIAMOND_MUT, marker="D", ls="none",
-                      mec="white", mew=0.5, label="LME estimate ± 95% CI"),
+                      mec="white", mew=0.5, label="LME estimate\n± 95% CI"),
         mlines.Line2D([], [], color=DIAMOND_N2, marker="D", ls="none",
                       mec="white", mew=0.5, label="N2 mean ± SEM"),
     ]
-    ax.legend(handles=leg_handles, fontsize=7.5, loc="upper left", framealpha=0.9)
+    ax.legend(handles=leg_handles, fontsize=7.5, framealpha=0.9,
+              loc="center left", bbox_to_anchor=(1.02, 0.5))
 
     plt.tight_layout()
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
