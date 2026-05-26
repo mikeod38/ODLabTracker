@@ -114,8 +114,7 @@ Example configs are in `configs/`. Copy and edit the one closest to your setup.
 | Config | Use case |
 |--------|----------|
 | `IR_medium.yaml` | IR brightfield, medium magnification |
-| `PGlow_GCaMP_2.5x_8bin.yaml` | GCaMP pharynx, 2.5× objective, 8-bin camera |
-| `PGlow_GCaMP_2.5x_16bin.yaml` | GCaMP pharynx, 2.5× objective, 16-bin camera |
+| `PGlow_GCaMP_2.5x_8bin.yaml` | Fluorescence imaging, 2.5× objective |
 | `Stereo0.5X_small.yaml` | Stereo scope, 0.5× objective |
 | `Stereo1X_small.yaml` | Stereo scope, 1× objective |
 
