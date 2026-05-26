@@ -98,7 +98,7 @@ def make_plot(df, order, stat_df, particle_df, n2_by_date_speed, n2_grand_speed,
     fig_h  = max(8, n_geno * 0.45)
 
     fig, (ax, ax_dist) = plt.subplots(
-        1, 2, sharey=True, figsize=(13, fig_h),
+        1, 2, sharey=True, figsize=(8.5, 11),
         gridspec_kw={"width_ratios": [2, 1]})
     fig.subplots_adjust(wspace=0.04)
     fig.suptitle(title, fontsize=11, y=1.01)
