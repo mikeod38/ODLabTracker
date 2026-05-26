@@ -83,6 +83,7 @@ python track.py -c configs\your_config.yaml -f path\to\video.avi
 ## Documentation
 
 - **[Pumping analysis tutorial](docs/pumping_tutorial.md)** — full walkthrough of pumping mode: config setup, running a batch, output files, and interpreting HMM state classification results
+- **[Locomotion analysis methods](dev/LOCOMOTION_ANALYSIS_METHODS.md)** — batch postural comparison pipeline: per-particle metric extraction, LME statistical model, normalization strategy, and figure generation
 
 ---
 

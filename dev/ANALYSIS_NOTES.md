@@ -5,6 +5,56 @@ Most recent session first.
 
 ---
 
+## Session: 2026-05-26 — LME fixed-date refactor, package extraction, methods write-up
+
+### LME shrinkage bias fix
+- **Problem**: random date effects (`(1|date)`) undergo REML shrinkage that fails to absorb
+  day-to-day N2 speed variability with ~3 recordings per genotype. This biased fold-change
+  estimates upward for strains recorded on atypically fast N2 days.
+- **Fix**: switched to fixed date effects (`date` as a covariate). Fixed effects do not
+  shrink and are equivalent to within-date normalization.
+- **Consequence**: only recordings from dates with a same-date N2 are included in the LME
+  (`keep_n2_dates()` R helper). Genotypes with no same-date N2 get `NaN` stats.
+- **Validation**: cat-1, cest-2.1, and cest2.1+tbh-1 all moved below 1.0 fold-change
+  after the fix, consistent with their raw normalized values.
+
+### Sort order: LME fold-change (not raw speed)
+- Genotypes in the strip plot are now ordered by ascending LME fold-change estimate.
+- Genotypes with `NaN` stats (no same-date N2) are sorted by raw speed and placed at bottom.
+
+### Reversal/pirouette rate panels removed from plot
+- Rate panels hidden because ~3 min recordings yield ~4 reversals/worm — too few for
+  reliable LME estimates. LME fits remain cached in `postural_comparison_stats.csv`.
+- See "Open questions / TODO" for when to revisit.
+
+### Figure changes
+- N2 recordings added back as grey dots on the N2 row.
+- N2 grand mean labeled in µm/s (converted from mm/s) to distinguish from fold-change axis.
+- Speed distribution panel added as right panel (shared y-axis with strip plot).
+  - Gaussian KDE, bandwidth = 0.30; densities clipped below 3% of peak.
+  - Sub-recording violins within each genotype; N2 recordings pooled.
+- Legend anchored dynamically: left edge at max observed dot + 1% of axis width.
+
+### Generalization and package extraction
+- Removed all hardcoded NAS/dataset-specific paths from `batch_postural_comparison.py`.
+- Added `--data-dir`, `--out-dir`, `--title`, `--refit`, `--refresh` CLI arguments.
+- Core analysis functions moved to `src/ODLabTracker/locomotion.py` so they are importable
+  after `pip install -e .`. The script is now a thin CLI wrapper around these functions.
+- Supplemental CSV exported: `supplemental_particle_data.csv` (per-particle metrics for
+  independent reanalysis).
+- Methods written to `dev/LOCOMOTION_ANALYSIS_METHODS.md` (statistical rationale,
+  R reproduction code from supplemental CSV).
+
+### Key functions in `src/ODLabTracker/locomotion.py`
+- `load_recording(results_dir, frame_rate, min_speed)` — load single recording
+- `scan_dataset_particles(data_dir, frame_rate, exclusions, min_speed)` — batch load
+- `scan_dataset_fwd_frames(...)` — load per-forward-run-frame data for LME
+- `add_normalization(df, n2_ref, metrics)` — fold-change vs N2 by date
+- `fit_lme_stats(frame_df, particle_df, order, metrics, out_dir, n2_ref)` — R LME via subprocess
+- `genotype_order(df, stat_df, n2_ref)` — sort by LME fold-change
+
+---
+
 ## Session: 2026-05-20 (continued) — Frame-gap bug, speed QC, genotype comparison
 
 ### Frame-gap speed inflation bug (tracking.py)
