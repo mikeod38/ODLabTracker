@@ -551,17 +551,18 @@ def make_plot(df, order, stat_df, out_path):
     norm_col    = f"{metric}_norm"
     matched_col = f"{metric}_date_matched"
 
-    # Individual recording dots (mutants only)
+    # Individual recording dots
     for _, row in df.iterrows():
-        if row["genotype"] == N2_FOLDER:
-            continue
         y = ytick[row["genotype"]]
         x = row[norm_col]
         if pd.isna(x):
             continue
-        matched = row[matched_col]
-        ec, fc = (DOT_MATCHED, DOT_MATCHED) if matched else (DOT_UNMATCHED, "none")
-        ax.plot(x, y, "o", mfc=fc, mec=ec, ms=5, alpha=0.65, lw=0, zorder=2)
+        if row["genotype"] == N2_FOLDER:
+            ax.plot(x, y, "o", mfc=DOT_N2, mec=DOT_N2, ms=5, alpha=0.65, lw=0, zorder=2)
+        else:
+            matched = row[matched_col]
+            ec, fc = (DOT_MATCHED, DOT_MATCHED) if matched else (DOT_UNMATCHED, "none")
+            ax.plot(x, y, "o", mfc=fc, mec=ec, ms=5, alpha=0.65, lw=0, zorder=2)
 
     # Point estimates + uncertainty bars
     for geno in order:
@@ -576,7 +577,7 @@ def make_plot(df, order, stat_df, out_path):
             sem    = vals.sem() if len(vals) > 1 else 0.0
             lo, hi = center - sem, center + sem
             raw_n2 = df[df["genotype"] == N2_FOLDER][metric].mean()
-            ax.text(center, y + 0.19, f"{raw_n2:.3f}", fontsize=4.5, va="bottom",
+            ax.text(center, y + 0.19, f"{raw_n2 * 1000:.0f} µm/s", fontsize=4.5, va="bottom",
                     ha="center", color=dc, alpha=0.85, zorder=7)
             ax.plot([lo, hi], [y, y], color=dc, lw=2.5, solid_capstyle="round", zorder=4)
             ax.plot(center, y, "D", color=dc, ms=7, zorder=5, mec="white", mew=0.5)
@@ -618,7 +619,7 @@ def make_plot(df, order, stat_df, out_path):
         mlines.Line2D([], [], color=DIAMOND_N2, marker="D", ls="none",
                       mec="white", mew=0.5, label="N2 mean ± SEM"),
     ]
-    ax.legend(handles=leg_handles, fontsize=7.5, loc="lower right", framealpha=0.9)
+    ax.legend(handles=leg_handles, fontsize=7.5, loc="upper left", framealpha=0.9)
 
     plt.tight_layout()
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
