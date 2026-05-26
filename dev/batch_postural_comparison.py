@@ -271,8 +271,24 @@ def add_normalization(df):
 
 # ── genotype sort order ──────────────────────────────────────────────────────
 
-def genotype_order(df):
-    """Sort all genotypes by mean raw speed, ascending (slowest at bottom, fastest at top)."""
+def genotype_order(df, stat_df=None):
+    """Sort genotypes ascending (slowest/lowest FC at bottom).
+    With stat_df: sort by LME speed fold-change; unmatched genotypes fall back to raw FC.
+    Without stat_df: sort by mean raw speed."""
+    if stat_df is not None:
+        speed_lme = (stat_df[stat_df["metric"] == "speed"]
+                     .set_index("genotype")["fold_change"])
+        n2_speed = df[df["genotype"] == N2_FOLDER]["speed"].mean()
+        raw_fc   = df.groupby("genotype")["speed"].mean() / n2_speed
+
+        def _key(g):
+            if g == N2_FOLDER:
+                return 1.0
+            fc = speed_lme.get(g, np.nan)
+            return fc if not pd.isna(fc) else float(raw_fc.get(g, 1.0))
+
+        return sorted(df["genotype"].unique(), key=_key)
+
     return (df.groupby("genotype")["speed"]
               .mean().sort_values(ascending=True)
               .index.tolist())
@@ -825,8 +841,6 @@ def main():
     df[col_order].to_csv(csv_out, index=False, float_format="%.4f")
     print(f"\nSaved summary CSV: {csv_out}")
 
-    order = genotype_order(df)
-
     # ── LME stats ─────────────────────────────────────────────────────────────
     stats_out = os.path.join(args.out_dir, "postural_comparison_stats.csv")
     if os.path.exists(stats_out) and not args.refit:
@@ -834,9 +848,12 @@ def main():
         stat_df = pd.read_csv(stats_out)
     else:
         print("\nFitting LME models via R/lme4…")
-        stat_df = fit_lme_stats(frame_df, particle_df, order, METRICS, args.out_dir)
+        prelim_order = genotype_order(df)
+        stat_df = fit_lme_stats(frame_df, particle_df, prelim_order, METRICS, args.out_dir)
         stat_df.to_csv(stats_out, index=False, float_format="%.4f")
         print(f"Saved stats CSV: {stats_out}")
+
+    order = genotype_order(df, stat_df)
 
     fig_out = os.path.join(args.out_dir, "postural_comparison.png")
     make_plot(df, order, stat_df, fig_out)
@@ -848,7 +865,7 @@ def main():
                          out_path=dist_out)
 
     # Print summary
-    print("\nGenotype summary (sorted by speed):")
+    print("\nGenotype summary (sorted by LME speed FC):")
     summary = []
     for geno in order:
         rows_m = df[(df["genotype"] == geno) & df["speed_date_matched"]]
