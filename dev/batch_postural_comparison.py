@@ -538,12 +538,17 @@ DIAMOND_N2    = "#111111"   # near-black  — N2 mean
 
 # ── main comparison figure ───────────────────────────────────────────────────
 
-def make_plot(df, order, stat_df, out_path):
+def make_plot(df, order, stat_df, particle_df, n2_by_date_speed, n2_grand_speed, out_path):
+    from scipy.stats import gaussian_kde
+
     ytick  = {g: i for i, g in enumerate(order)}
     n_geno = len(order)
     fig_h  = max(8, n_geno * 0.45)
 
-    fig, ax = plt.subplots(figsize=(8, fig_h))
+    fig, (ax, ax_dist) = plt.subplots(
+        1, 2, sharey=True, figsize=(13, fig_h),
+        gridspec_kw={"width_ratios": [2, 1]})
+    fig.subplots_adjust(wspace=0.04)
     fig.suptitle("Nawaphat locomotion off food — forward-run speed (fold-change vs N2)",
                  fontsize=11, y=1.01)
 
@@ -551,7 +556,7 @@ def make_plot(df, order, stat_df, out_path):
     norm_col    = f"{metric}_norm"
     matched_col = f"{metric}_date_matched"
 
-    # Individual recording dots
+    # ── left panel: strip plot ────────────────────────────────────────────────
     for _, row in df.iterrows():
         y = ytick[row["genotype"]]
         x = row[norm_col]
@@ -564,7 +569,6 @@ def make_plot(df, order, stat_df, out_path):
             ec, fc = (DOT_MATCHED, DOT_MATCHED) if matched else (DOT_UNMATCHED, "none")
             ax.plot(x, y, "o", mfc=fc, mec=ec, ms=5, alpha=0.65, lw=0, zorder=2)
 
-    # Point estimates + uncertainty bars
     for geno in order:
         y  = ytick[geno]
         dc = DIAMOND_N2 if geno == N2_FOLDER else DIAMOND_MUT
@@ -625,109 +629,71 @@ def make_plot(df, order, stat_df, out_path):
     ax.legend(handles=leg_handles, fontsize=7.5, framealpha=0.9,
               loc="center left", bbox_to_anchor=(legend_x, 0.5))
 
+    # ── right panel: per-recording speed distributions ────────────────────────
+    VIOLIN_HW = 0.13   # half-height per recording violin
+    N2_VHW    = 0.27   # N2 pooled violin (wider — many particles)
+    x_range   = np.linspace(0, 2.5, 500)
+
+    for geno in order:
+        y_ctr = ytick[geno]
+        ax_dist.axhline(y_ctr - 0.5, color="lightgray", lw=0.3, zorder=0)
+
+        if geno == N2_FOLDER:
+            vals = particle_df[particle_df["genotype"] == N2_FOLDER]["fwd_speed"].dropna()
+            ref  = n2_grand_speed
+            if len(vals) >= 3 and ref > 0:
+                vals_norm = vals / ref
+                kde     = gaussian_kde(vals_norm, bw_method=0.30)
+                density = kde(x_range)
+                density = density / density.max() * N2_VHW
+                ax_dist.fill_between(x_range, y_ctr - density, y_ctr + density,
+                                     alpha=0.45, color=DOT_N2, lw=0)
+                ax_dist.plot(x_range, y_ctr + density, color=DOT_N2, lw=0.4, alpha=0.6)
+                ax_dist.plot(x_range, y_ctr - density, color=DOT_N2, lw=0.4, alpha=0.6)
+                med = float(np.median(vals_norm))
+                ax_dist.plot([med, med], [y_ctr - N2_VHW * 0.85, y_ctr + N2_VHW * 0.85],
+                             color=DOT_N2, lw=1.2, solid_capstyle="round", zorder=3)
+        else:
+            dates   = sorted(particle_df[particle_df["genotype"] == geno]["date"].unique())
+            n       = len(dates)
+            if n == 0:
+                continue
+            spacing = min(0.28, 0.70 / max(1, n - 1))
+            offsets = [i * spacing - spacing * (n - 1) / 2 for i in range(n)]
+
+            for date, offset in zip(dates, offsets):
+                vals  = particle_df[(particle_df["genotype"] == geno) &
+                                    (particle_df["date"] == date)]["fwd_speed"].dropna()
+                ref   = n2_by_date_speed.get(date, n2_grand_speed)
+                color = DOT_MATCHED if date in n2_by_date_speed else DOT_UNMATCHED
+                if len(vals) < 3 or ref <= 0:
+                    continue
+                vals_norm = vals / ref
+                try:
+                    kde     = gaussian_kde(vals_norm, bw_method=0.30)
+                    density = kde(x_range)
+                    density = density / density.max() * VIOLIN_HW
+                except Exception:
+                    continue
+                y_row = y_ctr + offset
+                ax_dist.fill_between(x_range, y_row - density, y_row + density,
+                                     alpha=0.45, color=color, lw=0)
+                ax_dist.plot(x_range, y_row + density, color=color, lw=0.4, alpha=0.6)
+                ax_dist.plot(x_range, y_row - density, color=color, lw=0.4, alpha=0.6)
+                med = float(np.median(vals_norm))
+                ax_dist.plot([med, med], [y_row - VIOLIN_HW * 0.85, y_row + VIOLIN_HW * 0.85],
+                             color=color, lw=1.2, solid_capstyle="round", zorder=3)
+
+    ax_dist.axvline(1.0, color="gray", lw=0.8, ls="--", alpha=0.5, zorder=0)
+    ax_dist.set_xlim(0, 2.5)
+    ax_dist.set_xlabel("Speed distribution\n(fold-change vs same-date N2)", fontsize=9)
+    ax_dist.spines[["top", "right", "left"]].set_visible(False)
+    ax_dist.tick_params(axis="x", labelsize=8)
+    ax_dist.tick_params(axis="y", left=False)
+
     plt.tight_layout()
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     print(f"Saved figure: {out_path}")
-    plt.close(fig)
-
-
-# ── speed distribution figure ────────────────────────────────────────────────
-
-_SUBROW_H = 0.65   # height (in y-units) per recording row
-_GENO_GAP = 0.35   # gap between genotype blocks
-
-
-def make_speed_dist_plot(particle_df, order, n2_by_date_speed, n2_grand_speed, out_path):
-    """
-    Per-recording speed distributions, one violin per recording, grouped by genotype.
-
-    Normalization:
-        - Mutant recordings: particle speed / same-date N2 recording median
-        - N2: pooled distribution, particle speed / N2 grand median (all centers at ~1.0)
-    """
-    from scipy.stats import gaussian_kde
-
-    # Build y-axis layout: mutants get 1 sub-row per recording; N2 gets 1 pooled row
-    layout         = {}  # geno -> {"rows": [(y, date_or_None), ...], "y_center": float}
-    tick_positions = []
-    tick_labels    = []
-    current_y      = 0.0
-
-    for geno in order:
-        if geno == N2_FOLDER:
-            row_specs = [(current_y + _SUBROW_H / 2, None)]
-            n_rows    = 1
-        else:
-            dates     = sorted(particle_df[particle_df["genotype"] == geno]["date"].unique())
-            row_specs = [(current_y + i * _SUBROW_H + _SUBROW_H / 2, d)
-                         for i, d in enumerate(dates)]
-            n_rows    = len(dates)
-
-        y_lo      = current_y
-        y_hi      = current_y + n_rows * _SUBROW_H
-        y_center  = (y_lo + y_hi) / 2
-        layout[geno] = {"rows": row_specs, "y_lo": y_lo, "y_hi": y_hi}
-        tick_positions.append(y_center)
-        tick_labels.append(geno)
-        current_y = y_hi + _GENO_GAP
-
-    total_h = current_y
-    fig_h   = max(10, total_h * 0.30)
-    fig, ax = plt.subplots(figsize=(10, fig_h))
-    fig.suptitle(
-        "Per-recording forward-run speed distribution\n"
-        "(mutants: normalized to same-date N2 median; N2: pooled)",
-        fontsize=11)
-
-    x_range   = np.linspace(0, 2.5, 500)
-    violin_hw = _SUBROW_H * 0.42
-
-    for geno in order:
-        color = DOT_N2 if geno == N2_FOLDER else DOT_MATCHED
-
-        for y_row, date in layout[geno]["rows"]:
-            if date is None:  # N2 pooled
-                vals = particle_df[particle_df["genotype"] == N2_FOLDER]["fwd_speed"].dropna()
-                ref  = n2_grand_speed
-            else:
-                vals = particle_df[(particle_df["genotype"] == geno) &
-                                   (particle_df["date"] == date)]["fwd_speed"].dropna()
-                ref  = n2_by_date_speed.get(date, n2_grand_speed)
-
-            if len(vals) < 3 or ref <= 0:
-                continue
-            vals_norm = vals / ref
-
-            try:
-                kde     = gaussian_kde(vals_norm, bw_method=0.30)
-                density = kde(x_range)
-                density = density / density.max() * violin_hw
-            except Exception:
-                continue
-
-            ax.fill_between(x_range, y_row - density, y_row + density,
-                            alpha=0.45, color=color, lw=0)
-            ax.plot(x_range, y_row + density, color=color, lw=0.4, alpha=0.6)
-            ax.plot(x_range, y_row - density, color=color, lw=0.4, alpha=0.6)
-            med = float(np.median(vals_norm))
-            ax.plot([med, med], [y_row - violin_hw * 0.85, y_row + violin_hw * 0.85],
-                    color=color, lw=1.2, solid_capstyle="round", zorder=3)
-
-        # Light separator below each genotype block
-        ax.axhline(layout[geno]["y_lo"], color="lightgray", lw=0.3, zorder=0)
-
-    ax.axvline(1.0, color="gray", lw=0.8, ls="--", alpha=0.5, zorder=0)
-    ax.set_xlim(0, 2.5)
-    ax.set_ylim(-0.2, total_h)
-    ax.set_yticks(tick_positions)
-    ax.set_yticklabels(tick_labels, fontsize=8)
-    ax.set_xlabel("Forward-run speed (fold-change vs same-date N2 median)", fontsize=9)
-    ax.spines[["top", "right"]].set_visible(False)
-    ax.tick_params(axis="x", labelsize=8)
-
-    plt.tight_layout()
-    fig.savefig(out_path, dpi=150, bbox_inches="tight")
-    print(f"Saved speed distribution figure: {out_path}")
     plt.close(fig)
 
 
@@ -843,13 +809,10 @@ def main():
     order = genotype_order(df, stat_df)
 
     fig_out = os.path.join(args.out_dir, "postural_comparison.png")
-    make_plot(df, order, stat_df, fig_out)
-
-    dist_out = os.path.join(args.out_dir, "postural_comparison_speed_dist.png")
-    make_speed_dist_plot(particle_df, order,
-                         n2_by_date_speed=n2_by_date["speed"],
-                         n2_grand_speed=n2_grand["speed"],
-                         out_path=dist_out)
+    make_plot(df, order, stat_df, particle_df,
+              n2_by_date_speed=n2_by_date["speed"],
+              n2_grand_speed=n2_grand["speed"],
+              out_path=fig_out)
 
     # Print summary
     print("\nGenotype summary (sorted by LME speed FC):")
