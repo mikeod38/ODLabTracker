@@ -619,8 +619,11 @@ def make_plot(df, order, stat_df, out_path):
         mlines.Line2D([], [], color=DIAMOND_N2, marker="D", ls="none",
                       mec="white", mew=0.5, label="N2 mean ± SEM"),
     ]
+    xlim = ax.get_xlim()
+    max_dot = df[norm_col].max()
+    legend_x = (max_dot - xlim[0]) / (xlim[1] - xlim[0]) + 0.01
     ax.legend(handles=leg_handles, fontsize=7.5, framealpha=0.9,
-              loc="center left", bbox_to_anchor=(1.02, 0.5))
+              loc="center left", bbox_to_anchor=(legend_x, 0.5))
 
     plt.tight_layout()
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
